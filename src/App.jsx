@@ -75,9 +75,13 @@ export default function App() {
   async function fetchRole(userId) {
     const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
     if (data) {
+      // This forces the database role to be lowercase and removes accidental spaces
       const currentRole = data.role ? data.role.toLowerCase().trim() : '';
-      setUserRole(currentRole);
       
+      // Update the state so the Navbar buttons show up
+      setUserRole(currentRole === 'master' ? 'admin' : currentRole);
+      
+      // Route to the correct view
       if (currentRole === 'admin' || currentRole === 'master') {
         setView('admin');
         setIsAdminAuth(true); 
