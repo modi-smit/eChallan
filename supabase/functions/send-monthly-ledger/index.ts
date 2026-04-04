@@ -317,7 +317,7 @@ serve(async (req: any) => {
         `,
         attachments: [
           {
-            filename: `GOD_Ledger_${startIST_as_UTC}.xls`,
+            filename: `GOD Ledger ${formatDateIST(startUTC.toISOString()).replace(/\//g, '.')} to ${formatDateIST(endUTC.toISOString()).replace(/\//g, '.')}.xls`,
             content: base64Xls,
           }
         ]
