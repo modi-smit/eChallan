@@ -201,10 +201,10 @@ export default function App() {
     if (data) setLedgerData(data);
   };
 
-  // --- SAVE ADMIN NOTE (FIXED) ---
+  // --- SAVE ADMIN NOTE ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
-      // Updates ALL rows that belong to this challan_no or group_id
+      // Apply the note to ALL rows that share this challan_no or group_id
       const { error } = await supabase
         .from('transactions')
         .update({ admin_note: tempNoteText })
@@ -468,7 +468,8 @@ export default function App() {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
       } else {
-         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [] };
+         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
+         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
          dispatchedDataObj[key].items.push(row);
       }
     });
@@ -502,8 +503,11 @@ export default function App() {
       group.items.forEach((row, i) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
-        // FIXED STRICT COMPARISON BUG: Added Number() to prevent string vs int mismatches
-        const isChanged = row.req_qty != null && row.disp_qty != null && Number(row.disp_qty) !== Number(row.req_qty);
+        
+        // STRICT MATH CHECK FOR RED TEXT
+        const reqQ = Number(row.req_qty);
+        const dispQ = Number(row.disp_qty);
+        const isChanged = Boolean(row.req_qty) && Boolean(row.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
         
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
@@ -511,7 +515,7 @@ export default function App() {
           challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(),
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          adminNote: row.admin_note || '',
+          adminNote: group.admin_note || '', // Grabs from group
           color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;'
         });
       });
@@ -527,11 +531,11 @@ export default function App() {
       returnGroups.forEach(group => {
         let bgColor = "#fee2e2"; 
         let groupTotal = 0;
-        group.items.forEach((row) => {
+        group.items.forEach((row, i) => {
           const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
           groupTotal += rawQty;
           leftRowsFlat.push({
-            type: 'data', isReturn: true, isFirst: true, rowspan: 1, 
+            type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
             date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
             challan: row.challan_no || '-', desc: row.item_desc.toUpperCase(),
             nos: String(rawQty).padStart(2, '0'),
@@ -604,17 +608,21 @@ export default function App() {
             if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'data') {
             if (l.isFirst) {
-                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal;">${l.date}</td>`;
+                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
         }
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.desc}</td>`;
+        
+        // CSS Wrap implemented here
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
 
         if (l.isReturn) {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.note || ''}</td>`;
+            // Return Note Span
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
         } else {
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.adminNote || ''}</td>`;
+            // Admin Note Span (Fixed to span the whole challan)
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
         }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
@@ -648,7 +656,7 @@ export default function App() {
         } else if (r.type === 'group_title') {
             html += `<td colspan="3" style="background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
-            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal;">${r.desc}</td>`;
+            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.nos}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;">${r.qty}</td>`;
         }
@@ -1377,7 +1385,6 @@ export default function App() {
                                     keyValue: key 
                                 };
                             }
-                            // If a subsequent row has the note, grab it
                             if (row.admin_note && !acc[key].admin_note) {
                                 acc[key].admin_note = row.admin_note;
                             }
@@ -1402,7 +1409,6 @@ export default function App() {
                                       keyValue: key 
                                   };
                               }
-                              // If a subsequent row has the note, grab it
                               if (row.admin_note && !acc[key].admin_note) {
                                   acc[key].admin_note = row.admin_note;
                               }
@@ -1424,13 +1430,25 @@ export default function App() {
                                 <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
                                   {group.challan_no || '-'}
                                   
-                                  {/* ADMIN NOTE UI SECTION (FIXED FOR SIZING & WRAPPING) */}
+                                  {/* NEW ADMIN NOTE UI SECTION */}
                                   {group.status !== 'RETURN_ACCEPTED' && (
-                                    <div className="mt-3 bg-white border border-gray-300 p-2 shadow-sm rounded-sm max-w-[200px] group-hover:border-gray-400 transition-colors">
+                                    <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[200px]">
+                                      <div className="flex justify-between items-center mb-1">
+                                        <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">ADMIN NOTE</span>
+                                        {!editingNoteId || editingNoteId !== group.keyValue ? (
+                                          <button 
+                                            onClick={() => { setEditingNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
+                                            className="text-[9px] text-blue-600 hover:text-blue-800 font-bold underline"
+                                          >
+                                            EDIT
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                      
                                       {editingNoteId === group.keyValue ? (
                                         <div className="space-y-2">
                                           <textarea
-                                            className="w-full border-2 border-black p-1.5 text-[10px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words"
+                                            className="w-full border border-gray-400 p-1.5 text-[11px] font-bold focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none whitespace-pre-wrap break-words"
                                             rows="3"
                                             value={tempNoteText}
                                             onChange={(e) => setTempNoteText(e.target.value)}
@@ -1438,24 +1456,13 @@ export default function App() {
                                             autoFocus
                                           />
                                           <div className="flex space-x-2">
-                                            <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-black text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-800 flex-1 border-2 border-black active:translate-y-px">SAVE</button>
-                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-black px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
+                                            <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-blue-700 flex-1 rounded-sm shadow-sm">SAVE</button>
+                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 rounded-sm border border-gray-300 shadow-sm">CANCEL</button>
                                           </div>
                                         </div>
                                       ) : (
-                                        <div className="flex flex-col">
-                                          <span className="text-[9px] text-gray-500 font-bold mb-0.5 uppercase tracking-wide">ADMIN NOTE</span>
-                                          {group.admin_note ? (
-                                            <span className="text-[11px] font-bold text-blue-900 whitespace-normal break-words leading-tight">{group.admin_note}</span>
-                                          ) : (
-                                            <span className="text-[10px] italic text-gray-400">NONE</span>
-                                          )}
-                                          <button 
-                                            onClick={() => { setEditingNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                            className="mt-1 text-[10px] text-left text-blue-600 hover:text-blue-800 font-bold underline decoration-blue-300 underline-offset-2"
-                                          >
-                                            {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
-                                          </button>
+                                        <div className="min-h-[40px] text-[11px] font-bold text-gray-800 whitespace-pre-wrap break-words">
+                                          {group.admin_note ? group.admin_note : <span className="italic text-gray-400 font-normal">No note added.</span>}
                                         </div>
                                       )}
                                     </div>
@@ -1488,8 +1495,11 @@ export default function App() {
                                   <ul className="space-y-1">
                                     {group.items.map((item, i) => {
                                       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-                                      // FIXED STRICT COMPARISON BUG HERE AS WELL
-                                      const isChanged = item.req_qty != null && item.disp_qty != null && Number(item.disp_qty) !== Number(item.req_qty);
+                                      // STRICT MATH CHECK HERE
+                                      const reqQ = Number(item.req_qty);
+                                      const dispQ = Number(item.disp_qty);
+                                      const isChanged = Boolean(item.req_qty) && Boolean(item.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
+                                      
                                       return (
                                         <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${isChanged || group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
                                           {getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))}

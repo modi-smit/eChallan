@@ -8,14 +8,12 @@ const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 serve(async (req: any) => {
   try {
-    // --- 0. PARSE REQUEST FOR MANUAL OVERRIDE PASSCODE ---
     let reqBody: any = {};
     if (req.method === "POST") {
-      try { reqBody = await req.json(); } catch (e) { /* ignore empty body from cron */ }
+      try { reqBody = await req.json(); } catch (e) { /* ignore */ }
     }
     const isManualTest = reqBody.force_send === "admin_test";
 
-    // --- 1. TIMEZONE & LAST DAY GATEKEEPER ---
     const now = new Date();
     const istTime = now.getTime() + (5.5 * 60 * 60 * 1000);
     const istDate = new Date(istTime); 
@@ -26,12 +24,10 @@ serve(async (req: any) => {
     
     const tomorrow = new Date(istTime + (24 * 60 * 60 * 1000));
     
-    // THE GATEKEEPER: If no passcode is provided AND it's not the last day, go to sleep.
     if (!isManualTest && tomorrow.getUTCDate() !== 1) {
         return new Response(JSON.stringify({ message: "Not the last day of the month. Sleeping." }), { status: 200 });
     }
 
-    // --- 2. CALCULATE EXACT 1ST-TO-TODAY BILLING CYCLE ---
     const supabase = createClient(supabaseUrl!, supabaseServiceKey!);
     
     const startIST_as_UTC = Date.UTC(year, month, 1, 0, 0, 0);
@@ -40,10 +36,10 @@ serve(async (req: any) => {
     const endIST_as_UTC = Date.UTC(year, month, day, 23, 59, 59);
     const endUTC = new Date(endIST_as_UTC - (5.5 * 60 * 60 * 1000));
 
-    // --- 3. FETCH CLOUD DATA ---
+    // FETCH DATA
     const [txResponse, masterResponse] = await Promise.all([
       supabase.from('transactions')
-        .select('*, admin_note') // <--- Add this
+        .select('*, admin_note')
         .gte('timestamp', startUTC.toISOString())
         .lte('timestamp', endUTC.toISOString())
         .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
@@ -55,7 +51,7 @@ serve(async (req: any) => {
     const ledgerData = txResponse.data;
     const masterItems = masterResponse.data || [];
 
-    // --- 4. EXCEL HELPERS ---
+    // HELPERS
     const getCategory = (desc: any) => {
       const item = masterItems.find((i: any) => i.description === desc);
       if (item && item.category) return item.category;
@@ -111,7 +107,6 @@ serve(async (req: any) => {
       return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
     };
 
-    // --- 5. EXCEL ENGINE COMPILATION ---
     const dispatchedDataObj: Record<string, any> = {};
     const returnsDataObj: Record<string, any> = {};
     
@@ -121,7 +116,8 @@ serve(async (req: any) => {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
       } else {
-         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [] };
+         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
+         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
          dispatchedDataObj[key].items.push(row);
       }
     });
@@ -155,14 +151,20 @@ serve(async (req: any) => {
       group.items.forEach((row: any, i: number) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
-        const isChanged = row.req_qty != null && row.disp_qty != null && Number(row.disp_qty) !== Number(row.req_qty);
+        
+        // STRICT MATH CHECK FOR RED TEXT
+        const reqQ = Number(row.req_qty);
+        const dispQ = Number(row.disp_qty);
+        const isChanged = Boolean(row.req_qty) && Boolean(row.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
+
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
-          date: `${formatDateIST(group.date)} ${formatTimeIST(group.date)}`,
+          date: `${formatDateIST(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTimeIST(group.date)}`,
           challan: group.challan_no || '-', desc: String(row.item_desc).toUpperCase(),
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;'
+          adminNote: group.admin_note || '',
+          color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;' 
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -177,12 +179,12 @@ serve(async (req: any) => {
       returnGroups.forEach((group: any) => {
         let bgColor = "#fee2e2"; 
         let groupTotal = 0;
-        group.items.forEach((row: any) => {
+        group.items.forEach((row: any, i: number) => {
           const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
           groupTotal += rawQty;
           leftRowsFlat.push({
-            type: 'data', isReturn: true, isFirst: true, rowspan: 1, 
-            date: `${formatDateIST(row.timestamp)} ${formatTimeIST(row.timestamp)}`,
+            type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
+            date: `${formatDateIST(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTimeIST(row.timestamp)}`,
             challan: row.challan_no || '-', desc: String(row.item_desc).toUpperCase(),
             nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
@@ -238,21 +240,19 @@ serve(async (req: any) => {
             if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'data') {
             if (l.isFirst) {
-                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.date}</td>`;
+                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
-        }
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.desc}</td>`;
-        // NOS and QTY now use l.qtyColor correctly
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
-
-        // New unified rendering for Notes:
-        if (l.isReturn) {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.note || ''}</td>`;
-        } else {
-            // Render Admin Note column
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.adminNote || ''}</td>`;
-        }
+            }
+            // CSS text wrap enforced here
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
+            
+            if (l.isReturn) {
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+            } else {
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
+            }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
@@ -285,7 +285,7 @@ serve(async (req: any) => {
         } else if (r.type === 'group_title') {
             html += `<td colspan="3" style="background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
-            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.desc}</td>`;
+            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.nos}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;">${r.qty}</td>`;
         }
@@ -296,7 +296,6 @@ serve(async (req: any) => {
     }
     html += `</table></body></html>`;
 
-    // --- 6. ENCODE & SEND ---
     const base64Xls = btoa(unescape(encodeURIComponent(html)));
 
     const res = await fetch("https://api.resend.com/emails", {
@@ -307,7 +306,7 @@ serve(async (req: any) => {
       },
       body: JSON.stringify({
         from: "Gujarat Oil Depot <onboarding@resend.dev>", 
-        to: ["smit.modi206@gmail.com"], // <--- 🚨 CHANGE THIS TO YOUR ACTUAL RESEND EMAIL 🚨
+        to: ["smit.modi206@gmail.com"], 
         subject: `Monthly Ledger Report: ${cycleTitle}`,
         html: `
           <div style="font-family: Arial, sans-serif; color: #333; padding: 20px;">
