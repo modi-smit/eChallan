@@ -824,6 +824,12 @@ export default function App() {
       const dispatchQty = parseInt(item.edit_qty) || 0;
       const reqQty = parseInt(item.req_qty);
 
+      // NEW FEATURE: If Depot sets Qty to 0, delete the pending PO entirely
+      if (dispatchQty === 0) {
+        await supabase.from('transactions').delete().eq('id', item.id);
+        continue; // Skip the rest of the logic so no backorder is created
+      }
+
       if (dispatchQty > 0) {
         await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id);
         printItems.push({ ...item, disp_qty: dispatchQty });
@@ -858,6 +864,12 @@ export default function App() {
     for (const item of processReturnModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0;
       const reqQty = parseInt(item.req_qty);
+
+      // NEW FEATURE: If Admin sets Return Qty to 0, delete the request entirely
+      if (dispatchQty === 0) {
+        await supabase.from('transactions').delete().eq('id', item.id);
+        continue; 
+      }
 
       if (dispatchQty > 0) {
         await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id);
