@@ -32,6 +32,10 @@ export default function App() {
   const [isAdminAuth, setIsAdminAuth] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
+  
+  // --- Admin Note States ---
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [tempNoteText, setTempNoteText] = useState("");
 
   // Retailer States
   const [retailMode, setRetailMode] = useState('PO'); 
@@ -75,13 +79,9 @@ export default function App() {
   async function fetchRole(userId) {
     const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
     if (data) {
-      // This forces the database role to be lowercase and removes accidental spaces
       const currentRole = data.role ? data.role.toLowerCase().trim() : '';
-      
-      // Update the state so the Navbar buttons show up
       setUserRole(currentRole === 'master' ? 'admin' : currentRole);
       
-      // Route to the correct view
       if (currentRole === 'admin' || currentRole === 'master') {
         setView('admin');
         setIsAdminAuth(true); 
@@ -126,7 +126,7 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
-  // --- EXISTING DATA FETCHING ---
+  // --- DATA FETCHING & SAVING ---
   useEffect(() => { 
     if (!session) return; 
     fetchMasterItems(); 
@@ -199,6 +199,28 @@ export default function App() {
       .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
       .order('timestamp', { ascending: false });
     if (data) setLedgerData(data);
+  };
+
+  // --- SAVE ADMIN NOTE ---
+  const saveAdminNote = async (transactionId) => {
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .update({ admin_note: tempNoteText })
+        .eq('id', transactionId);
+
+      if (error) throw error;
+
+      setLedgerData((prevData) =>
+        prevData.map((tx) =>
+          tx.id === transactionId ? { ...tx, admin_note: tempNoteText } : tx
+        )
+      );
+
+      setEditingNoteId(null);
+    } catch (error) {
+      alert(`Failed to save note: ${error.message}`);
+    }
   };
 
   const formatDate = (dateInput) => {
@@ -470,7 +492,7 @@ export default function App() {
     
     leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${formatDate()})`, isReturn: false });
     leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: false });
-    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY'], isReturn: false });
+    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], isReturn: false });
 
     dispatchedGroups.forEach(group => {
       let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
@@ -481,11 +503,11 @@ export default function App() {
         const isChanged = row.req_qty && row.disp_qty && row.disp_qty !== row.req_qty;
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
-          // Microsoft specific line-break command for same-cell wrapping
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
           challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(),
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
+          adminNote: row.admin_note || '',
           color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;'
         });
       });
@@ -506,7 +528,6 @@ export default function App() {
           groupTotal += rawQty;
           leftRowsFlat.push({
             type: 'data', isReturn: true, isFirst: true, rowspan: 1, 
-            // Microsoft specific line-break command
             date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
             challan: row.challan_no || '-', desc: row.item_desc.toUpperCase(),
             nos: String(rawQty).padStart(2, '0'),
@@ -563,7 +584,7 @@ export default function App() {
       
       if (i < leftRowsFlat.length) {
         const l = leftRowsFlat[i];
-        const spanLimit = l.isReturn ? 6 : 5;
+        const spanLimit = 6;
 
         if (l.type === 'title') {
             html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
@@ -579,21 +600,18 @@ export default function App() {
             if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'data') {
             if (l.isFirst) {
-                // Changed white-space to normal to allow the time to wrap underneath the date
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
-            }
-            // Changed white-space to normal so long item descriptions wrap instead of stretching
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.desc}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
-            
-            if (l.isReturn) {
-                // Changed white-space to normal so long notes/remarks wrap
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.note || ''}</td>`;
-            } else {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="border: none; background-color: transparent;"></td>`;
-            }
+        }
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.desc}</td>`;
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
+
+        if (l.isReturn) {
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.note || ''}</td>`;
+        } else {
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.adminNote || ''}</td>`;
+        }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
@@ -626,7 +644,6 @@ export default function App() {
         } else if (r.type === 'group_title') {
             html += `<td colspan="3" style="background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
-            // Changed white-space to normal so long summary descriptions wrap
             html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal;">${r.desc}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.nos}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;">${r.qty}</td>`;
@@ -1344,7 +1361,7 @@ export default function App() {
                         {Object.values(
                           ledgerData.reduce((acc, row) => {
                             const key = row.challan_no || row.group_id; 
-                            if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [] };
+                            if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [], admin_note: row.admin_note, id_for_note: row.id };
                             acc[key].items.push(row);
                             return acc;
                           }, {})
@@ -1354,7 +1371,7 @@ export default function App() {
                           Object.values(
                             ledgerData.reduce((acc, row) => {
                               const key = row.challan_no || row.group_id; 
-                              if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [] };
+                              if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [], admin_note: row.admin_note, id_for_note: row.id };
                               acc[key].items.push(row);
                               return acc;
                             }, {})
@@ -1370,7 +1387,47 @@ export default function App() {
                                 <td className="p-3 border-r border-gray-200 text-gray-900 font-bold text-xs text-center leading-tight">
                                   {formatDate(group.date)}<br/><span className="text-gray-900 font-bold text-xs">{formatTime(group.date)}</span>
                                 </td>
-                                <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">{group.challan_no || '-'}</td>
+                                <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
+                                  {group.challan_no || '-'}
+                                  
+                                  {/* ADMIN NOTE UI SECTION */}
+                                  {group.status !== 'RETURN_ACCEPTED' && (
+                                    <div className="mt-3 bg-white border border-gray-300 p-2 shadow-sm rounded-sm max-w-[200px] group-hover:border-gray-400 transition-colors">
+                                      {editingNoteId === group.id_for_note ? (
+                                        <div className="space-y-2">
+                                          <input
+                                            type="text"
+                                            className="w-full border-2 border-black p-1 text-[10px] font-bold focus:outline-none focus:bg-yellow-50"
+                                            value={tempNoteText}
+                                            onChange={(e) => setTempNoteText(e.target.value)}
+                                            placeholder="ENTER NOTE..."
+                                            autoFocus
+                                          />
+                                          <div className="flex space-x-2">
+                                            <button onClick={() => saveAdminNote(group.id_for_note)} className="bg-black text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-800 flex-1">SAVE</button>
+                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-black px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 border border-gray-400">CANCEL</button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className="flex flex-col">
+                                          <span className="text-[9px] text-gray-500 font-bold mb-0.5 uppercase tracking-wide">ADMIN NOTE</span>
+                                          {group.admin_note ? (
+                                            <span className="text-[11px] font-bold text-blue-900 whitespace-normal break-words leading-tight">{group.admin_note}</span>
+                                          ) : (
+                                            <span className="text-[10px] italic text-gray-400">NONE</span>
+                                          )}
+                                          <button 
+                                            onClick={() => { setEditingNoteId(group.id_for_note); setTempNoteText(group.admin_note || ""); }}
+                                            className="mt-1 text-[10px] text-left text-blue-600 hover:text-blue-800 font-bold underline decoration-blue-300 underline-offset-2"
+                                          >
+                                            {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                </td>
                                 <td className="p-3 border-r border-gray-200">
                                   <ul className="space-y-1">
                                     {group.items.map((item, i) => (

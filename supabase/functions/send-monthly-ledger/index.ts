@@ -43,7 +43,7 @@ serve(async (req: any) => {
     // --- 3. FETCH CLOUD DATA ---
     const [txResponse, masterResponse] = await Promise.all([
       supabase.from('transactions')
-        .select('*')
+        .select('*, admin_note') // <--- Add this
         .gte('timestamp', startUTC.toISOString())
         .lte('timestamp', endUTC.toISOString())
         .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
@@ -147,7 +147,7 @@ serve(async (req: any) => {
     let leftRowsFlat: any[] = [];
     leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${cycleTitle})`, isReturn: false });
     leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: false });
-    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY'], isReturn: false });
+    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], isReturn: false });
 
     dispatchedGroups.forEach((group: any) => {
       let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
@@ -223,7 +223,7 @@ serve(async (req: any) => {
       html += `<tr style="height: 35px;">`;
       if (i < leftRowsFlat.length) {
         const l = leftRowsFlat[i];
-        const spanLimit = l.isReturn ? 6 : 5;
+        const spanLimit = 6;
         if (l.type === 'title') {
             html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
             if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
@@ -240,15 +240,19 @@ serve(async (req: any) => {
             if (l.isFirst) {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
-            }
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.desc}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
-            if (l.isReturn) {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.note || ''}</td>`;
-            } else {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="border: none; background-color: transparent;"></td>`;
-            }
+        }
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.desc}</td>`;
+        // NOS and QTY now use l.qtyColor correctly
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
+
+        // New unified rendering for Notes:
+        if (l.isReturn) {
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.note || ''}</td>`;
+        } else {
+            // Render Admin Note column
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.adminNote || ''}</td>`;
+        }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
