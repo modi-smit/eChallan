@@ -162,7 +162,7 @@ serve(async (req: any) => {
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
           adminNote: group.admin_note || '',
-          color: bgColor, qtyColor: 'color: #000;' 
+          color: bgColor, qtyColor: 'color: #000;' // BLACK TEXT ENFORCED
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -217,25 +217,25 @@ serve(async (req: any) => {
 
     let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`;
     html += `<table border="0" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; border-collapse: collapse; font-size: 13px; white-space: nowrap;">`;
-    html += `<colgroup><col width="130" /><col width="110" /><col width="380" /><col width="50" /><col width="130" /><col width="250" /><col width="30" /><col width="380" /><col width="80" /><col width="140" /></colgroup>`;
+    
+    // EXCEL COLUMN WIDTHS 
+    html += `<colgroup><col width="130" /><col width="110" /><col width="380" /><col width="50" /><col width="130" /><col width="180" /><col width="30" /><col width="380" /><col width="80" /><col width="140" /></colgroup>`;
 
     for(let i=0; i<maxRows; i++) {
       html += `<tr style="height: 35px;">`;
       if (i < leftRowsFlat.length) {
         const l = leftRowsFlat[i];
         const spanLimit = 6;
+        
         if (l.type === 'title') {
             html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'subtitle') {
             html += `<td colspan="${spanLimit}" style="background-color: #f3f4f6; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'header') {
             l.cols.forEach((col: any, idx: number) => {
                 const align = (idx === 2) ? 'left' : 'center'; 
                 html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`;
             });
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'data') {
             if (l.isFirst) {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
@@ -246,14 +246,15 @@ serve(async (req: any) => {
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
             
             if (l.isReturn) {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
             } else {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
             }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
         } else if (l.type === 'empty') {
             html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
         }
@@ -298,7 +299,7 @@ serve(async (req: any) => {
       },
       body: JSON.stringify({
         from: "Gujarat Oil Depot <onboarding@resend.dev>", 
-        to: ["smit.modi206@gmail.com"], // <--- 🚨 CHANGE THIS TO YOUR ACTUAL RESEND EMAIL 🚨
+        to: ["smit.modi206@gmail.com"], 
         subject: `Monthly Ledger Report: ${cycleTitle}`,
         html: `
           <div style="font-family: Arial, sans-serif; color: #333; padding: 20px;">

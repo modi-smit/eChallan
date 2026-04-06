@@ -11,7 +11,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'], 
       manifest: {
-        name: 'GOD echallan',
+        name: 'Gujarat Oil Depot Management System',
         short_name: 'GOD eChallan',
         description: 'Gujarat Oil Depot Management System',
         theme_color: '#0f172a',

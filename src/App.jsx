@@ -211,7 +211,6 @@ export default function App() {
 
       if (error) throw error;
 
-      // Force a full refetch from the database to guarantee the UI syncs perfectly
       await fetchLedger();
       setEditingNoteId(null);
     } catch (error) {
@@ -287,7 +286,6 @@ export default function App() {
     }
   };
 
-  // Fixed Display Qty to retain negative signs for the summary report
   const getDisplayQty = (desc, qty, unit) => {
     const item = masterItems.find(i => i.description === desc);
     const isNegative = qty < 0;
@@ -509,7 +507,7 @@ export default function App() {
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
           adminNote: group.admin_note || '', 
-          color: bgColor, qtyColor: 'color: #000;' // EXPLICITLY REMOVED RED TEXT LOGIC
+          color: bgColor, qtyColor: 'color: #000;' 
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -534,7 +532,7 @@ export default function App() {
             nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
             note: row.note || '',
-            color: bgColor, qtyColor: 'color: #dc2626;' // RETURNS ARE STILL RED
+            color: bgColor, qtyColor: 'color: #dc2626;' 
           });
         });
         leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: true });
@@ -573,7 +571,7 @@ export default function App() {
         <col width="380" />
         <col width="50" />
         <col width="130" />
-        <col width="250" />
+        <col width="180" />
         <col width="30" />
         <col width="380" />
         <col width="80" />
@@ -589,16 +587,13 @@ export default function App() {
 
         if (l.type === 'title') {
             html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'subtitle') {
             html += `<td colspan="${spanLimit}" style="background-color: #f3f4f6; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'header') {
             l.cols.forEach((col, idx) => {
                 const align = (idx === 2) ? 'left' : 'center'; 
                 html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`;
             });
-            if (!l.isReturn) html += `<td style="border: none; background-color: transparent;"></td>`;
         } else if (l.type === 'data') {
             if (l.isFirst) {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
@@ -610,16 +605,16 @@ export default function App() {
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
 
         if (l.isReturn) {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
         } else {
-            // FIXED EXCEL TEXT WRAP WIDTH
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
         }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            // FIXED WHITE SPACE IN TOTAL ROW
-            html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
+            // Split into explicit separate cells to fix missing grid color in Excel
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
         } else if (l.type === 'empty') {
             html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
         }
@@ -1040,6 +1035,7 @@ export default function App() {
 
         {view === 'depot' && (
           <div className="flex flex-col-reverse md:grid md:grid-cols-2 gap-4 items-start">
+            
             <div className="w-full space-y-4">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
@@ -1415,7 +1411,7 @@ export default function App() {
                                   
                                   {/* ADMIN NOTE UI SECTION */}
                                   {group.status !== 'RETURN_ACCEPTED' && (
-                                    <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[200px]">
+                                    <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[160px]">
                                       <div className="flex justify-between items-center mb-1">
                                         <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">ADMIN NOTE</span>
                                         {!editingNoteId || editingNoteId !== group.keyValue ? (
