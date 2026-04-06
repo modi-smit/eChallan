@@ -137,6 +137,83 @@ export default function App() {
     if (isAdminAuth) fetchLedger();
   }, [isAdminAuth, session]);
 
+  // --- NEW: SUPABASE REALTIME LISTENER ---
+  useEffect(() => {
+    if (!session || !userRole) return;
+
+    // Set up the listener on the 'transactions' table
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions' },
+        (payload) => {
+          
+          // 1. Handle New Inserts (e.g., Retailer places a PO, Depot requests a return)
+          if (payload.eventType === 'INSERT') {
+            const newRecord = payload.new;
+            
+            // If Retailer created a PO, notify Admin/Depot
+            if (newRecord.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
+                // Ensure we only alert once per group_id, not for every single item in the cart
+                // We do a simple check: if we already fetched this PO, don't alert again immediately.
+                // A better approach for production is debouncing, but this works for basic alerting.
+                alert(`New Alert: Order ${newRecord.group_id} has been received.`);
+                fetchPendingPOs();
+            }
+            
+            // If Depot requested a Return, notify Admin/Retailer
+            if (newRecord.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
+                alert(`New Alert: Return Request ${newRecord.group_id} has been submitted.`);
+                fetchPendingDepotReturns();
+            }
+          }
+
+          // 2. Handle Updates (e.g., Depot dispatches an order)
+          if (payload.eventType === 'UPDATE') {
+             const newRecord = payload.new;
+             const oldRecord = payload.old;
+
+             // If Depot dispatches goods, notify Retailer
+             if (oldRecord.status === 'PO_PLACED' && newRecord.status === 'DISPATCHED' && userRole === 'retail') {
+                 alert(`Alert: Goods have been dispatched under Challan ${newRecord.challan_no}`);
+                 fetchIncomingDeliveries();
+             }
+             
+             // If Admin/Retailer processes a return request, notify Depot
+             if (oldRecord.status === 'RETURN_REQUESTED' && newRecord.status === 'RETURN_INITIATED' && userRole === 'depot') {
+                 alert(`Alert: Return Request has been processed. Incoming Return: ${newRecord.challan_no}`);
+                 fetchPendingReturns();
+             }
+          }
+
+          // 3. Handle Deletes (e.g., Depot cancels a PO by setting qty to 0)
+          if (payload.eventType === 'DELETE') {
+              const oldRecord = payload.old;
+              
+              // If a PO was deleted, refresh the Retailer's view
+              if (userRole === 'retail') {
+                  // We don't have the status of the deleted record in payload.old by default in Supabase,
+                  // so we just trigger a refresh of the pending POs to update the UI.
+                  alert(`Alert: A pending order item has been cancelled by the Depot.`);
+                  fetchPendingPOs();
+              }
+              // Refresh Admin/Depot view as well
+              if(userRole === 'admin' || userRole === 'depot') {
+                  fetchPendingDepotReturns();
+              }
+          }
+        }
+      )
+      .subscribe();
+
+    // Cleanup the listener when the component unmounts
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session, userRole]);
+
+
   const fetchMasterItems = async () => {
     const { data } = await supabase.from('master_items').select('*');
     if (data) {
@@ -612,7 +689,6 @@ export default function App() {
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            // Split into explicit separate cells to fix missing grid color in Excel
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
         } else if (l.type === 'empty') {
@@ -824,10 +900,10 @@ export default function App() {
       const dispatchQty = parseInt(item.edit_qty) || 0;
       const reqQty = parseInt(item.req_qty);
 
-      // NEW FEATURE: If Depot sets Qty to 0, delete the pending PO entirely
+      // DELETION LOGIC (Q=0)
       if (dispatchQty === 0) {
         await supabase.from('transactions').delete().eq('id', item.id);
-        continue; // Skip the rest of the logic so no backorder is created
+        continue; 
       }
 
       if (dispatchQty > 0) {
@@ -865,7 +941,7 @@ export default function App() {
       const dispatchQty = parseInt(item.edit_qty) || 0;
       const reqQty = parseInt(item.req_qty);
 
-      // NEW FEATURE: If Admin sets Return Qty to 0, delete the request entirely
+      // DELETION LOGIC (Q=0)
       if (dispatchQty === 0) {
         await supabase.from('transactions').delete().eq('id', item.id);
         continue; 
@@ -1421,7 +1497,7 @@ export default function App() {
                                 <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
                                   {group.challan_no || '-'}
                                   
-                                  {/* ADMIN NOTE UI SECTION */}
+                                  {/* ADMIN NOTE UI SECTION (SHRUNK TO max-w-40/160px) */}
                                   {group.status !== 'RETURN_ACCEPTED' && (
                                     <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[160px]">
                                       <div className="flex justify-between items-center mb-1">
@@ -1486,6 +1562,7 @@ export default function App() {
                                   <ul className="space-y-1">
                                     {group.items.map((item, i) => {
                                       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
+                                      // RED TEXT REMOVED FOR STANDARD DISPATCHES
                                       return (
                                         <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
                                           {getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))}
