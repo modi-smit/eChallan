@@ -75,17 +75,20 @@ serve(async (req: any) => {
 
     const getDisplayQty = (desc: any, qty: any, unit: any) => {
       const item = masterItems.find((i: any) => i.description === desc);
+      const isNegative = qty < 0;
+      const absQty = Math.abs(qty);
+      const sign = isNegative ? '- ' : '';
+      
       if (item && item.category === 'SERVO' && item.ratio && parseFloat(item.ratio) > 1) {
           const ratio = parseInt(item.ratio);
-          const q = parseInt(Math.abs(qty));
-          const cases = Math.floor(q / ratio);
-          const cans = q % ratio;
+          const cases = Math.floor(absQty / ratio);
+          const cans = absQty % ratio;
           let parts = [];
           if (cases > 0) parts.push(`${cases} CAR`);
           if (cans > 0) parts.push(`${cans} ${unit}`);
-          return parts.length > 0 ? parts.join(' + ') : `0 ${unit}`;
+          return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
       }
-      return `${Math.abs(qty)} ${unit}`;
+      return `${sign}${absQty || 0} ${unit}`;
     };
 
     const formatDateIST = (dateStr: any) => {
@@ -151,11 +154,6 @@ serve(async (req: any) => {
       group.items.forEach((row: any, i: number) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
-        
-        // STRICT MATH CHECK FOR RED TEXT
-        const reqQ = Number(row.req_qty);
-        const dispQ = Number(row.disp_qty);
-        const isChanged = Boolean(row.req_qty) && Boolean(row.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
 
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
@@ -164,7 +162,7 @@ serve(async (req: any) => {
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
           adminNote: group.admin_note || '',
-          color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;' 
+          color: bgColor, qtyColor: 'color: #000;' 
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -243,25 +241,19 @@ serve(async (req: any) => {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
             }
-            // CSS text wrap enforced here
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
             
             if (l.isReturn) {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
             } else {
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
+                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
             }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            if (l.isReturn) {
-                html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-            } else {
-                html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-                html += `<td style="border: none; background-color: transparent;"></td>`;
-            }
+            html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
         } else if (l.type === 'empty') {
             html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
         }
@@ -306,7 +298,7 @@ serve(async (req: any) => {
       },
       body: JSON.stringify({
         from: "Gujarat Oil Depot <onboarding@resend.dev>", 
-        to: ["smit.modi206@gmail.com"], 
+        to: ["smit.modi206@gmail.com"], // <--- 🚨 CHANGE THIS TO YOUR ACTUAL RESEND EMAIL 🚨
         subject: `Monthly Ledger Report: ${cycleTitle}`,
         html: `
           <div style="font-family: Arial, sans-serif; color: #333; padding: 20px;">

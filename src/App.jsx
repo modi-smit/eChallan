@@ -204,7 +204,6 @@ export default function App() {
   // --- SAVE ADMIN NOTE ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
-      // Apply the note to ALL rows that share this challan_no or group_id
       const { error } = await supabase
         .from('transactions')
         .update({ admin_note: tempNoteText })
@@ -212,13 +211,8 @@ export default function App() {
 
       if (error) throw error;
 
-      // Update local state instantly for all matching rows
-      setLedgerData((prevData) =>
-        prevData.map((tx) =>
-          tx[keyField] === keyValue ? { ...tx, admin_note: tempNoteText } : tx
-        )
-      );
-
+      // Force a full refetch from the database to guarantee the UI syncs perfectly
+      await fetchLedger();
       setEditingNoteId(null);
     } catch (error) {
       alert(`Failed to save note: ${error.message}`);
@@ -293,19 +287,23 @@ export default function App() {
     }
   };
 
+  // Fixed Display Qty to retain negative signs for the summary report
   const getDisplayQty = (desc, qty, unit) => {
     const item = masterItems.find(i => i.description === desc);
+    const isNegative = qty < 0;
+    const absQty = Math.abs(qty);
+    const sign = isNegative ? '- ' : '';
+    
     if (item && item.category === 'SERVO' && item.ratio && parseFloat(item.ratio) > 1) {
         const ratio = parseInt(item.ratio);
-        const q = parseInt(Math.abs(qty));
-        const cases = Math.floor(q / ratio);
-        const cans = q % ratio;
+        const cases = Math.floor(absQty / ratio);
+        const cans = absQty % ratio;
         let parts = [];
         if (cases > 0) parts.push(`${cases} CAR`);
         if (cans > 0) parts.push(`${cans} ${unit}`);
-        return parts.length > 0 ? parts.join(' + ') : `0 ${unit}`;
+        return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
     }
-    return `${Math.abs(qty) || 0} ${unit}`;
+    return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
   };
 
   const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState) => {
@@ -504,19 +502,14 @@ export default function App() {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
         
-        // STRICT MATH CHECK FOR RED TEXT
-        const reqQ = Number(row.req_qty);
-        const dispQ = Number(row.disp_qty);
-        const isChanged = Boolean(row.req_qty) && Boolean(row.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
-        
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
           challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(),
           nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          adminNote: group.admin_note || '', // Grabs from group
-          color: bgColor, qtyColor: isChanged ? 'color: #dc2626;' : 'color: #000;'
+          adminNote: group.admin_note || '', 
+          color: bgColor, qtyColor: 'color: #000;' // EXPLICITLY REMOVED RED TEXT LOGIC
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -541,7 +534,7 @@ export default function App() {
             nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
             note: row.note || '',
-            color: bgColor, qtyColor: 'color: #dc2626;'
+            color: bgColor, qtyColor: 'color: #dc2626;' // RETURNS ARE STILL RED
           });
         });
         leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: true });
@@ -612,27 +605,21 @@ export default function App() {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
         }
         
-        // CSS Wrap implemented here
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
 
         if (l.isReturn) {
-            // Return Note Span
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
         } else {
-            // Admin Note Span (Fixed to span the whole challan)
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
+            // FIXED EXCEL TEXT WRAP WIDTH
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 250px; max-width: 250px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
         }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            if (l.isReturn) {
-                html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-            } else {
-                html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-                html += `<td style="border: none; background-color: transparent;"></td>`;
-            }
+            // FIXED WHITE SPACE IN TOTAL ROW
+            html += `<td colspan="2" style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
         } else if (l.type === 'empty') {
             html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
         }
@@ -897,7 +884,6 @@ export default function App() {
 
   // --- UI RENDERING ---
 
-  // 1. Loading Screen
   if (loadingAuth) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-200">
@@ -906,7 +892,6 @@ export default function App() {
     );
   }
 
-  // 2. Auth/Login Screen
   if (!session) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans">
@@ -945,7 +930,6 @@ export default function App() {
     );
   }
 
-  // 3. Smart Navigation Bar
   const renderNav = () => (
     <nav className="bg-gray-800 text-white border-b-2 border-black sticky top-0 z-50">
       <div className="container mx-auto px-4 py-2.5 flex justify-between items-center text-sm">
@@ -1056,7 +1040,6 @@ export default function App() {
 
         {view === 'depot' && (
           <div className="flex flex-col-reverse md:grid md:grid-cols-2 gap-4 items-start">
-            
             <div className="w-full space-y-4">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
@@ -1430,7 +1413,7 @@ export default function App() {
                                 <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
                                   {group.challan_no || '-'}
                                   
-                                  {/* NEW ADMIN NOTE UI SECTION */}
+                                  {/* ADMIN NOTE UI SECTION */}
                                   {group.status !== 'RETURN_ACCEPTED' && (
                                     <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[200px]">
                                       <div className="flex justify-between items-center mb-1">
@@ -1495,13 +1478,8 @@ export default function App() {
                                   <ul className="space-y-1">
                                     {group.items.map((item, i) => {
                                       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-                                      // STRICT MATH CHECK HERE
-                                      const reqQ = Number(item.req_qty);
-                                      const dispQ = Number(item.disp_qty);
-                                      const isChanged = Boolean(item.req_qty) && Boolean(item.disp_qty) && reqQ > 0 && dispQ > 0 && reqQ !== dispQ;
-                                      
                                       return (
-                                        <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${isChanged || group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
+                                        <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
                                           {getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))}
                                         </li>
                                       )
