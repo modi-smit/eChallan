@@ -155,7 +155,7 @@ serve(async (req: any) => {
       group.items.forEach((row: any, i: number) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
-        const isChanged = row.req_qty && row.disp_qty && row.disp_qty !== row.req_qty;
+        const isChanged = row.req_qty != null && row.disp_qty != null && Number(row.disp_qty) !== Number(row.req_qty);
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDateIST(group.date)} ${formatTimeIST(group.date)}`,

@@ -201,19 +201,21 @@ export default function App() {
     if (data) setLedgerData(data);
   };
 
-  // --- SAVE ADMIN NOTE ---
-  const saveAdminNote = async (transactionId) => {
+  // --- SAVE ADMIN NOTE (FIXED) ---
+  const saveAdminNote = async (keyField, keyValue) => {
     try {
+      // Updates ALL rows that belong to this challan_no or group_id
       const { error } = await supabase
         .from('transactions')
         .update({ admin_note: tempNoteText })
-        .eq('id', transactionId);
+        .eq(keyField, keyValue);
 
       if (error) throw error;
 
+      // Update local state instantly for all matching rows
       setLedgerData((prevData) =>
         prevData.map((tx) =>
-          tx.id === transactionId ? { ...tx, admin_note: tempNoteText } : tx
+          tx[keyField] === keyValue ? { ...tx, admin_note: tempNoteText } : tx
         )
       );
 
@@ -500,7 +502,9 @@ export default function App() {
       group.items.forEach((row, i) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
         groupTotal += rawQty;
-        const isChanged = row.req_qty && row.disp_qty && row.disp_qty !== row.req_qty;
+        // FIXED STRICT COMPARISON BUG: Added Number() to prevent string vs int mismatches
+        const isChanged = row.req_qty != null && row.disp_qty != null && Number(row.disp_qty) !== Number(row.req_qty);
+        
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
@@ -603,14 +607,14 @@ export default function App() {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
         }
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.desc}</td>`;
+        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.desc}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
         html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
 
         if (l.isReturn) {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.note || ''}</td>`;
+            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.note || ''}</td>`;
         } else {
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: nowrap;">${l.adminNote || ''}</td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal;">${l.adminNote || ''}</td>`;
         }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
@@ -1361,7 +1365,22 @@ export default function App() {
                         {Object.values(
                           ledgerData.reduce((acc, row) => {
                             const key = row.challan_no || row.group_id; 
-                            if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [], admin_note: row.admin_note, id_for_note: row.id };
+                            if (!acc[key]) {
+                                acc[key] = { 
+                                    date: row.timestamp, 
+                                    challan_no: row.challan_no, 
+                                    group_id: row.group_id, 
+                                    status: row.status, 
+                                    items: [], 
+                                    admin_note: row.admin_note || '', 
+                                    keyField: row.challan_no ? 'challan_no' : 'group_id', 
+                                    keyValue: key 
+                                };
+                            }
+                            // If a subsequent row has the note, grab it
+                            if (row.admin_note && !acc[key].admin_note) {
+                                acc[key].admin_note = row.admin_note;
+                            }
                             acc[key].items.push(row);
                             return acc;
                           }, {})
@@ -1371,7 +1390,22 @@ export default function App() {
                           Object.values(
                             ledgerData.reduce((acc, row) => {
                               const key = row.challan_no || row.group_id; 
-                              if (!acc[key]) acc[key] = { date: row.timestamp, challan_no: row.challan_no, group_id: row.group_id, status: row.status, items: [], admin_note: row.admin_note, id_for_note: row.id };
+                              if (!acc[key]) {
+                                  acc[key] = { 
+                                      date: row.timestamp, 
+                                      challan_no: row.challan_no, 
+                                      group_id: row.group_id, 
+                                      status: row.status, 
+                                      items: [], 
+                                      admin_note: row.admin_note || '', 
+                                      keyField: row.challan_no ? 'challan_no' : 'group_id', 
+                                      keyValue: key 
+                                  };
+                              }
+                              // If a subsequent row has the note, grab it
+                              if (row.admin_note && !acc[key].admin_note) {
+                                  acc[key].admin_note = row.admin_note;
+                              }
                               acc[key].items.push(row);
                               return acc;
                             }, {})
@@ -1390,22 +1424,22 @@ export default function App() {
                                 <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
                                   {group.challan_no || '-'}
                                   
-                                  {/* ADMIN NOTE UI SECTION */}
+                                  {/* ADMIN NOTE UI SECTION (FIXED FOR SIZING & WRAPPING) */}
                                   {group.status !== 'RETURN_ACCEPTED' && (
                                     <div className="mt-3 bg-white border border-gray-300 p-2 shadow-sm rounded-sm max-w-[200px] group-hover:border-gray-400 transition-colors">
-                                      {editingNoteId === group.id_for_note ? (
+                                      {editingNoteId === group.keyValue ? (
                                         <div className="space-y-2">
-                                          <input
-                                            type="text"
-                                            className="w-full border-2 border-black p-1 text-[10px] font-bold focus:outline-none focus:bg-yellow-50"
+                                          <textarea
+                                            className="w-full border-2 border-black p-1.5 text-[10px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words"
+                                            rows="3"
                                             value={tempNoteText}
                                             onChange={(e) => setTempNoteText(e.target.value)}
                                             placeholder="ENTER NOTE..."
                                             autoFocus
                                           />
                                           <div className="flex space-x-2">
-                                            <button onClick={() => saveAdminNote(group.id_for_note)} className="bg-black text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-800 flex-1">SAVE</button>
-                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-black px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 border border-gray-400">CANCEL</button>
+                                            <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-black text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-800 flex-1 border-2 border-black active:translate-y-px">SAVE</button>
+                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-black px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                           </div>
                                         </div>
                                       ) : (
@@ -1417,7 +1451,7 @@ export default function App() {
                                             <span className="text-[10px] italic text-gray-400">NONE</span>
                                           )}
                                           <button 
-                                            onClick={() => { setEditingNoteId(group.id_for_note); setTempNoteText(group.admin_note || ""); }}
+                                            onClick={() => { setEditingNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
                                             className="mt-1 text-[10px] text-left text-blue-600 hover:text-blue-800 font-bold underline decoration-blue-300 underline-offset-2"
                                           >
                                             {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
@@ -1454,7 +1488,8 @@ export default function App() {
                                   <ul className="space-y-1">
                                     {group.items.map((item, i) => {
                                       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-                                      const isChanged = item.req_qty && item.disp_qty && item.disp_qty !== item.req_qty;
+                                      // FIXED STRICT COMPARISON BUG HERE AS WELL
+                                      const isChanged = item.req_qty != null && item.disp_qty != null && Number(item.disp_qty) !== Number(item.req_qty);
                                       return (
                                         <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${isChanged || group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
                                           {getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))}
