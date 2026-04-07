@@ -19,9 +19,10 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // --- PAGINATION STATES ---
+  // --- PAGINATION STATES (DYNAMIC) ---
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
+  const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
   
   // --- COLLAPSIBLE ADMIN NOTE STATE ---
   const [openNoteId, setOpenNoteId] = useState(null);
@@ -59,8 +60,7 @@ export default function App() {
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
   // --- STATIC ARRAYS ---
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const yearOptions = [ledgerYear - 1, ledgerYear, ledgerYear + 1, ledgerYear + 2];
+  const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
   // --- AUTH LOGIC ---
   useEffect(() => {
@@ -84,7 +84,7 @@ export default function App() {
     if (data) {
       const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
       setUserRole(currentRole === 'master' ? 'admin' : currentRole);
-      if (currentRole === 'admin' || currentRole === 'master') { setView('admin'); setIsAdminAuth(true); } 
+      if (currentRole === 'admin' || currentRole === 'master') { setView('admin'); setIsAdminAuth(true); fetchAvailableYears(); } 
       else if (currentRole === 'retail') setView('retail');
       else if (currentRole === 'depot') setView('depot');
       else setView('unassigned');
@@ -100,6 +100,22 @@ export default function App() {
     if (data?.user) await fetchRole(data.user.id);
     setIsLoggingIn(false);
   }
+
+  // --- FAST DYNAMIC YEAR CALCULATION ---
+  const fetchAvailableYears = async () => {
+    const currentYear = new Date().getFullYear();
+    // Ask DB for ONLY the very first transaction ever placed (Takes 1 millisecond)
+    const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
+    
+    if (data && data.length > 0) {
+      const firstYear = new Date(data[0].timestamp).getFullYear();
+      const years = [];
+      for (let i = firstYear; i <= currentYear; i++) years.push(i);
+      setAvailableYears(years.reverse()); // Put newest year at the top
+    } else {
+      setAvailableYears([currentYear]);
+    }
+  };
 
   // --- HYPER-OPTIMIZED DATA FETCHING (WITH PAGINATION) ---
   const fetchMasterItems = async () => {
@@ -125,7 +141,6 @@ export default function App() {
     if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
-  // MONTH-WISE PAGINATION FETCH
   const fetchLedgerData = async () => {
     if (!isAdminAuth) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
@@ -146,7 +161,6 @@ export default function App() {
     await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]);
   };
 
-  // Trigger data refresh when Session, Role, or Month/Year changes
   useEffect(() => { refreshAllData(); }, [isAdminAuth, session, ledgerMonth, ledgerYear]);
 
   // --- REALTIME NOTIFICATIONS ---
@@ -428,9 +442,8 @@ export default function App() {
     }
     html += `</table></body></html>`;
 
-    // REVERTED: Filename is back to manual date-based naming
     const blob = new Blob([html], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    const a = document.createElement("a"); a.href = url; a.download = `GOD Ledger ${monthNames[ledgerMonth]} ${ledgerYear}.xls`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
@@ -581,7 +594,12 @@ export default function App() {
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs">
           <span className="tracking-widest">Gujarat Oil Depot</span>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            {userRole && userRole !== 'admin' && (
+              <div className="bg-yellow-400 text-black px-3 py-1 rounded font-black text-[11px] uppercase shadow-sm border border-yellow-600 mr-2">
+                LOGGED IN: {userRole === 'depot' ? 'DEPOT' : userRole === 'retail' ? 'RETAIL' : userRole}
+              </div>
+            )}
             {userRole === 'admin' && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
                 <button onClick={() => setView('depot')} className={`px-2 py-1 ${view === 'depot' ? 'bg-white text-black' : ''}`}>DEPOT</button>
@@ -660,6 +678,15 @@ export default function App() {
           </div>
         )}
 
+        {view === 'unassigned' && (
+          <div className="flex items-center justify-center mt-20">
+            <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
+              <h2 className="text-xl font-black text-red-800 mb-2">NO TERMINAL ASSIGNED</h2>
+              <p className="font-bold text-gray-800 text-sm">Your account does not have a valid role (Depot, Retail, or Admin) assigned in the database.</p>
+            </div>
+          </div>
+        )}
+
         {view === 'admin' && isAdminAuth && (
           <div className="space-y-4">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
@@ -676,7 +703,7 @@ export default function App() {
                   {monthNames.map((m, i) => <option key={i} value={i}>{m}</option>)}
                 </select>
                 <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1 text-xs font-bold uppercase focus:outline-none cursor-pointer">
-                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                  {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
                 <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 py-1.5 font-bold text-xs ml-2">EXPORT EXCEL</button>
               </div>
@@ -707,7 +734,7 @@ export default function App() {
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
-                    }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
+                    }, {})).map((group, idx) => (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'}`}>
                         <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
                           {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal">{formatTime(group.timestamp)}</span>
@@ -715,7 +742,6 @@ export default function App() {
                         <td className="p-3 border-r border-gray-300">
                           <div className="font-black mb-2 text-[13px]">{group.challan_no || 'PENDING'}</div>
                           
-                          {/* MINIMIZED ADMIN NOTE */}
                           {group.status !== 'RETURN_ACCEPTED' && (
                             <div className="relative mt-2">
                               {openNoteId === group.keyValue ? (
