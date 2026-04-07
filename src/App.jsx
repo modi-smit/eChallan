@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
 export default function App() {
-  // --- NEW AUTH STATES ---
+  // --- AUTH & SYSTEM STATES ---
   const [session, setSession] = useState(null);
   const [userRole, setUserRole] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
@@ -12,12 +12,22 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // --- EXISTING STATES ---
+  // --- UI & DATA STATES ---
   const [view, setView] = useState(''); 
   const [masterItems, setMasterItems] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
+  const [ledgerData, setLedgerData] = useState([]);
+  
+  // --- PAGINATION STATES ---
+  const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
+  const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
+  
+  // --- COLLAPSIBLE ADMIN NOTE STATE ---
+  const [openNoteId, setOpenNoteId] = useState(null);
+  const [tempNoteText, setTempNoteText] = useState("");
 
-  // Depot States
+  // --- DEPOT STATES ---
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
   const [searchQuery, setSearchQuery] = useState('');
   const [qty, setQty] = useState('');
@@ -25,19 +35,9 @@ export default function App() {
   const [selectedUnit, setSelectedUnit] = useState('CANS'); 
   const [depotCart, setDepotCart] = useState([]); 
   const [depotReturnNote, setDepotReturnNote] = useState(''); 
-  const [pendingPOs, setPendingPOs] = useState({}); 
-  const [pendingReturns, setPendingReturns] = useState({});
+  const [pendingDepotReturns, setPendingDepotReturns] = useState({});
 
-  // Admin States
-  const [isAdminAuth, setIsAdminAuth] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
-  const [ledgerData, setLedgerData] = useState([]);
-  
-  // --- Admin Note States ---
-  const [editingNoteId, setEditingNoteId] = useState(null);
-  const [tempNoteText, setTempNoteText] = useState("");
-
-  // Retailer States
+  // --- RETAIL STATES ---
   const [retailMode, setRetailMode] = useState('PO'); 
   const [retailSearch, setRetailSearch] = useState('');
   const [retailQty, setRetailQty] = useState('');
@@ -46,13 +46,21 @@ export default function App() {
   const [retailReturnNote, setRetailReturnNote] = useState(''); 
   const [isRetailDropdownOpen, setIsRetailDropdownOpen] = useState(false);
   const [retailCart, setRetailCart] = useState([]); 
-  const [incomingDeliveries, setIncomingDeliveries] = useState({});
-  const [pendingDepotReturns, setPendingDepotReturns] = useState({});
   
-  // Modals
+  // --- SHARED QUEUE STATES ---
+  const [pendingPOs, setPendingPOs] = useState({}); 
+  const [incomingDeliveries, setIncomingDeliveries] = useState({});
+  const [pendingReturns, setPendingReturns] = useState({});
+  const [isAdminAuth, setIsAdminAuth] = useState(false);
+
+  // --- MODALS ---
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
+
+  // --- STATIC ARRAYS ---
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const yearOptions = [ledgerYear - 1, ledgerYear, ledgerYear + 1, ledgerYear + 2];
 
   // --- AUTH LOGIC ---
   useEffect(() => {
@@ -65,292 +73,154 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) fetchRole(session.user.id);
-      else {
-        setUserRole(null);
-        setView('');
-        setIsAdminAuth(false);
-        setLoadingAuth(false);
-      }
+      else { setUserRole(null); setView(''); setIsAdminAuth(false); setLoadingAuth(false); }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
   async function fetchRole(userId) {
-    const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
+    const { data } = await supabase.from('users').select('role').eq('id', userId).single();
     if (data) {
-      const currentRole = data.role ? data.role.toLowerCase().trim() : '';
+      const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
       setUserRole(currentRole === 'master' ? 'admin' : currentRole);
-      
-      if (currentRole === 'admin' || currentRole === 'master') {
-        setView('admin');
-        setIsAdminAuth(true); 
-      } else if (currentRole === 'retail') {
-        setView('retail');
-      } else if (currentRole === 'depot') {
-        setView('depot');
-      } else {
-        setView('unassigned');
-      }
+      if (currentRole === 'admin' || currentRole === 'master') { setView('admin'); setIsAdminAuth(true); } 
+      else if (currentRole === 'retail') setView('retail');
+      else if (currentRole === 'depot') setView('depot');
+      else setView('unassigned');
     }
     setLoadingAuth(false);
   }
 
   async function handleLogin(e) {
-    e.preventDefault();
-    setLoginError('');
-    setIsLoggingIn(true); 
-    
+    e.preventDefault(); setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
-    const hiddenPin = "123456"; 
-    
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: hiddenEmail,
-      password: hiddenPin,
-    });
-
-    if (error) {
-      setLoginError(`System Error: ${error.message}`);
-      setIsLoggingIn(false);
-      return;
-    }
-
-    if (data?.user) {
-      await fetchRole(data.user.id);
-    }
-    
+    const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
+    if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
+    if (data?.user) await fetchRole(data.user.id);
     setIsLoggingIn(false);
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-  }
-
-  // --- DATA FETCHING & SAVING ---
-  useEffect(() => { 
-    if (!session) return; 
-    fetchMasterItems(); 
-    fetchPendingPOs(); 
-    fetchIncomingDeliveries(); 
-    fetchPendingReturns();
-    fetchPendingDepotReturns();
-    if (isAdminAuth) fetchLedger();
-  }, [isAdminAuth, session]);
-
-  // --- NEW: SUPABASE REALTIME LISTENER ---
-  useEffect(() => {
-    if (!session || !userRole) return;
-
-    // Set up the listener on the 'transactions' table
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'transactions' },
-        (payload) => {
-          
-          // 1. Handle New Inserts (e.g., Retailer places a PO, Depot requests a return)
-          if (payload.eventType === 'INSERT') {
-            const newRecord = payload.new;
-            
-            // If Retailer created a PO, notify Admin/Depot
-            if (newRecord.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
-                // Ensure we only alert once per group_id, not for every single item in the cart
-                // We do a simple check: if we already fetched this PO, don't alert again immediately.
-                // A better approach for production is debouncing, but this works for basic alerting.
-                alert(`New Alert: Order ${newRecord.group_id} has been received.`);
-                fetchPendingPOs();
-            }
-            
-            // If Depot requested a Return, notify Admin/Retailer
-            if (newRecord.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
-                alert(`New Alert: Return Request ${newRecord.group_id} has been submitted.`);
-                fetchPendingDepotReturns();
-            }
-          }
-
-          // 2. Handle Updates (e.g., Depot dispatches an order)
-          if (payload.eventType === 'UPDATE') {
-             const newRecord = payload.new;
-             const oldRecord = payload.old;
-
-             // If Depot dispatches goods, notify Retailer
-             if (oldRecord.status === 'PO_PLACED' && newRecord.status === 'DISPATCHED' && userRole === 'retail') {
-                 alert(`Alert: Goods have been dispatched under Challan ${newRecord.challan_no}`);
-                 fetchIncomingDeliveries();
-             }
-             
-             // If Admin/Retailer processes a return request, notify Depot
-             if (oldRecord.status === 'RETURN_REQUESTED' && newRecord.status === 'RETURN_INITIATED' && userRole === 'depot') {
-                 alert(`Alert: Return Request has been processed. Incoming Return: ${newRecord.challan_no}`);
-                 fetchPendingReturns();
-             }
-          }
-
-          // 3. Handle Deletes (e.g., Depot cancels a PO by setting qty to 0)
-          if (payload.eventType === 'DELETE') {
-              const oldRecord = payload.old;
-              
-              // If a PO was deleted, refresh the Retailer's view
-              if (userRole === 'retail') {
-                  // We don't have the status of the deleted record in payload.old by default in Supabase,
-                  // so we just trigger a refresh of the pending POs to update the UI.
-                  alert(`Alert: A pending order item has been cancelled by the Depot.`);
-                  fetchPendingPOs();
-              }
-              // Refresh Admin/Depot view as well
-              if(userRole === 'admin' || userRole === 'depot') {
-                  fetchPendingDepotReturns();
-              }
-          }
-        }
-      )
-      .subscribe();
-
-    // Cleanup the listener when the component unmounts
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [session, userRole]);
-
-
+  // --- HYPER-OPTIMIZED DATA FETCHING (WITH PAGINATION) ---
   const fetchMasterItems = async () => {
     const { data } = await supabase.from('master_items').select('*');
-    if (data) {
-      setMasterItems(data);
-      setUploadStatus(data.length > 0 ? `${data.length} SKUs AVAILABLE` : 'WAITING UPLOAD');
+    if (data && data.length > 0) {
+      setMasterItems(data); setUploadStatus(`${data.length} SKUs AVAILABLE`);
+    } else {
+      setMasterItems([]); setUploadStatus('WAITING UPLOAD');
     }
   };
 
-  const fetchPendingPOs = async () => {
-    const { data } = await supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true });
-    if (data) {
-      const grouped = data.reduce((acc, curr) => {
-        if (!acc[curr.group_id]) acc[curr.group_id] = [];
-        acc[curr.group_id].push(curr);
-        return acc;
-      }, {});
-      setPendingPOs(grouped);
-    } else setPendingPOs({});
+  const fetchPendingData = async () => {
+    const promises = [
+      supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true }),
+      supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false }),
+      supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true }),
+      supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true })
+    ];
+    const results = await Promise.all(promises);
+    if (results[0].data) setPendingPOs(results[0].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+    if (results[1].data) setIncomingDeliveries(results[1].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+    if (results[2].data) setPendingDepotReturns(results[2].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+    if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
-  const fetchPendingDepotReturns = async () => {
-    const { data } = await supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true });
-    if (data) {
-      const grouped = data.reduce((acc, curr) => {
-        if (!acc[curr.group_id]) acc[curr.group_id] = [];
-        acc[curr.group_id].push(curr);
-        return acc;
-      }, {});
-      setPendingDepotReturns(grouped);
-    } else setPendingDepotReturns({});
-  };
+  // MONTH-WISE PAGINATION FETCH
+  const fetchLedgerData = async () => {
+    if (!isAdminAuth) return;
+    const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
+    const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
 
-  const fetchPendingReturns = async () => {
-    const { data } = await supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true });
-    if (data) {
-      const grouped = data.reduce((acc, curr) => {
-        if (!acc[curr.challan_no]) acc[curr.challan_no] = [];
-        acc[curr.challan_no].push(curr);
-        return acc;
-      }, {});
-      setPendingReturns(grouped);
-    } else setPendingReturns({});
-  };
-
-  const fetchIncomingDeliveries = async () => {
-    const { data } = await supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false });
-    if (data) {
-      const grouped = data.reduce((acc, curr) => {
-        if (!acc[curr.challan_no]) acc[curr.challan_no] = [];
-        acc[curr.challan_no].push(curr);
-        return acc;
-      }, {});
-      setIncomingDeliveries(grouped);
-    } else setIncomingDeliveries({});
-  };
-
-  const fetchLedger = async () => {
     const { data } = await supabase.from('transactions')
       .select('*')
       .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
+      .gte('timestamp', startDate)
+      .lte('timestamp', endDate)
       .order('timestamp', { ascending: false });
+
     if (data) setLedgerData(data);
   };
+
+  const refreshAllData = async () => {
+    if (!session) return;
+    await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]);
+  };
+
+  // Trigger data refresh when Session, Role, or Month/Year changes
+  useEffect(() => { refreshAllData(); }, [isAdminAuth, session, ledgerMonth, ledgerYear]);
+
+  // --- REALTIME NOTIFICATIONS ---
+  useEffect(() => {
+    if (!session || !userRole) return;
+    const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+          if (payload.eventType === 'INSERT') {
+            if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
+                alert(`New Alert: Order ${payload.new.group_id} has been received.`); refreshAllData();
+            }
+            if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
+                alert(`New Alert: Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
+            }
+          }
+          if (payload.eventType === 'UPDATE') {
+             if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') {
+                 alert(`Alert: Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData();
+             }
+             if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') {
+                 alert(`Alert: Incoming Return: ${payload.new.challan_no}`); refreshAllData();
+             }
+          }
+          if (payload.eventType === 'DELETE' && userRole === 'retail') {
+              alert(`Alert: A pending order item has been cancelled by the Depot.`); refreshAllData();
+          }
+        }).subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, userRole]);
 
   // --- SAVE ADMIN NOTE ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
-      const { error } = await supabase
-        .from('transactions')
-        .update({ admin_note: tempNoteText })
-        .eq(keyField, keyValue);
-
+      const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
       if (error) throw error;
-
-      await fetchLedger();
-      setEditingNoteId(null);
-    } catch (error) {
-      alert(`Failed to save note: ${error.message}`);
-    }
+      await fetchLedgerData();
+      setOpenNoteId(null);
+    } catch (error) { alert(`Failed to save note: ${error.message}`); }
   };
 
+  // --- FORMATTERS & HELPERS ---
   const formatDate = (dateInput) => {
     const d = dateInput ? new Date(dateInput) : new Date();
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    return `${day}/${month}/${d.getFullYear()}`;
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   };
 
   const formatTime = (dateInput) => {
     const d = dateInput ? new Date(dateInput) : new Date();
-    let hours = d.getHours();
-    let minutes = d.getMinutes();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12; 
-    minutes = minutes < 10 ? '0' + minutes : minutes;
+    let hours = d.getHours(); let minutes = d.getMinutes(); const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12; minutes = minutes < 10 ? '0' + minutes : minutes;
     return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
   };
 
   const isWithin30Days = (dateStr) => {
-    const txDate = new Date(dateStr);
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const txDate = new Date(dateStr); const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     return txDate >= thirtyDaysAgo;
   };
 
   const getNextSequence = async (type) => {
     const prefix = type === 'PO' ? 'PO2627' : type === 'RT' ? 'RT2627' : type === 'RR' ? 'RR2627' : 'CN2627';
     const column = type === 'PO' || type === 'RR' ? 'group_id' : 'challan_no';
-    
-    const { data } = await supabase
-      .from('transactions')
-      .select(column)
-      .like(column, `${prefix}%`)
-      .order(column, { ascending: false })
-      .limit(1);
-      
-    if (data && data.length > 0 && data[0][column]) {
-       const lastNum = parseInt(data[0][column].replace(prefix, ''));
-       return `${prefix}${String(lastNum + 1).padStart(3, '0')}`;
-    }
+    const { data } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
+    if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(data[0][column].replace(prefix, '')) + 1).padStart(3, '0')}`;
     return `${prefix}001`;
   };
 
   const getCategory = (desc) => {
-    const item = masterItems.find(i => i.description === desc);
-    if (item && item.category) return item.category;
+    const item = masterItems.find(i => i.description === desc); if (item && item.category) return item.category;
     const upperDesc = desc ? desc.toUpperCase() : '';
     if (upperDesc.includes('TYRE') || upperDesc.includes('TUBE') || upperDesc.match(/\d{2,3}\/\d{2,3}/)) return 'TVS';
     return 'SERVO';
   };
 
   const getUnit = (desc) => {
-    if (!desc) return '';
-    const upperDesc = desc.toUpperCase();
-    let cat = getCategory(desc);
-
+    if (!desc) return ''; const upperDesc = desc.toUpperCase(); let cat = getCategory(desc);
     if (cat === 'SERVO') {
       if (/210\s*L/i.test(desc) || /182\s*KG/i.test(desc)) return 'BRL';
       if (/50\s*L/i.test(desc)) return 'DRUM';
@@ -358,24 +228,16 @@ export default function App() {
       return 'CANS';
     } else {
       const learned = JSON.parse(localStorage.getItem('tvsUnits') || '{}');
-      if (learned[desc]) return learned[desc];
-      return /\bTT\b/i.test(upperDesc) ? 'SET' : 'PCS';
+      if (learned[desc]) return learned[desc]; return /\bTT\b/i.test(upperDesc) ? 'SET' : 'PCS';
     }
   };
 
   const getDisplayQty = (desc, qty, unit) => {
     const item = masterItems.find(i => i.description === desc);
-    const isNegative = qty < 0;
-    const absQty = Math.abs(qty);
-    const sign = isNegative ? '- ' : '';
-    
+    const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : '';
     if (item && item.category === 'SERVO' && item.ratio && parseFloat(item.ratio) > 1) {
-        const ratio = parseInt(item.ratio);
-        const cases = Math.floor(absQty / ratio);
-        const cans = absQty % ratio;
-        let parts = [];
-        if (cases > 0) parts.push(`${cases} CAR`);
-        if (cans > 0) parts.push(`${cans} ${unit}`);
+        const ratio = parseInt(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio;
+        let parts = []; if (cases > 0) parts.push(`${cases} CAR`); if (cans > 0) parts.push(`${cans} ${unit}`);
         return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
     }
     return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
@@ -387,154 +249,54 @@ export default function App() {
   };
 
   const smartSearch = (query) => {
-    if (!query) return [];
-    const terms = query.toLowerCase().split(' ').filter(Boolean);
-    return masterItems.filter(item => {
-      const desc = item.description.toLowerCase();
-      return terms.every(term => desc.includes(term));
-    }).slice(0, 50);
+    if (!query) return []; const terms = query.toLowerCase().split(' ').filter(Boolean);
+    return masterItems.filter(item => terms.every(term => item.description.toLowerCase().includes(term))).slice(0, 50);
   };
 
+  // --- PDF ENGINE ---
   const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); 
-    const isReturn = challanNo.startsWith('RT');
-    
-    doc.setFillColor(235, 235, 235);
-    doc.rect(5, 5, 138, 16, 'F'); 
-    
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(18);
-    doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-    doc.setFontSize(10);
-    doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-
-    doc.setLineWidth(0.4);
-    doc.line(5, 21, 143, 21);
-
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "bold");
-    doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27);
-    doc.setFont("helvetica", "normal");
-    doc.text(challanNo, 32, 27);
-    
-    doc.setFont("helvetica", "bold");
-    doc.text(`DATE :`, 104, 27);
-    doc.setFont("helvetica", "normal");
-    doc.text(formatDate(), 116, 27);
-
-    doc.setFont("helvetica", "bold");
-    doc.text(`BILLED TO :`, 8, 33);
-    doc.setFont("helvetica", "normal");
-    doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33);
-    doc.text(`RETAIL STORE`, 28, 38);
-    
-    const tableTop = 41;
-    doc.setFillColor(245, 245, 245);
-    doc.rect(5.2, tableTop + 0.2, 137.6, 6.6, 'F'); 
-    
-    doc.setLineWidth(0.4);
-    doc.line(5, tableTop, 143, tableTop);
-    doc.line(5, tableTop + 7, 143, tableTop + 7);
-    
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.text("SR", 10, tableTop + 5, { align: "center" });
-    doc.text("ITEM DESCRIPTION", 56, tableTop + 5, { align: "center" }); 
-    doc.text("NOS", 104, tableTop + 5, { align: "center" });
-    doc.text("QTY", 127.5, tableTop + 5, { align: "center" });
-
-    doc.setFont("helvetica", "normal");
-    let y = tableTop + 12;
-    let totalNos = 0;
-
+    const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
+    doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
+    doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+    doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+    doc.setLineWidth(0.4); doc.line(5, 21, 143, 21); doc.setFontSize(9);
+    doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(challanNo, 32, 27);
+    doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(), 116, 27);
+    doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+    const tableTop = 41; doc.setFillColor(245, 245, 245); doc.rect(5.2, tableTop + 0.2, 137.6, 6.6, 'F'); 
+    doc.setLineWidth(0.4); doc.line(5, tableTop, 143, tableTop); doc.line(5, tableTop + 7, 143, tableTop + 7);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("SR", 10, tableTop + 5, { align: "center" }); doc.text("ITEM DESCRIPTION", 56, tableTop + 5, { align: "center" }); doc.text("NOS", 104, tableTop + 5, { align: "center" }); doc.text("QTY", 127.5, tableTop + 5, { align: "center" });
+    doc.setFont("helvetica", "normal"); let y = tableTop + 12; let totalNos = 0;
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc;
-      const splitDesc = doc.splitTextToSize(desc, 80); 
-      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-      totalNos += rawQty;
-
-      const unit = item.unit || getUnit(desc);
-      const displayStr = getDisplayQty(desc, rawQty, unit);
-      const paddedQty = String(rawQty).padStart(2, '0');
-      
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
-      doc.text(splitDesc, 17, y); 
-      
-      doc.setFont("helvetica", "bold");
-      doc.text(paddedQty, 104, y, { align: "center" }); 
-      
-      doc.setFontSize(8); 
-      doc.text(displayStr, 127.5, y, { align: "center" }); 
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
-      
+      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 80); 
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
+      const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
+      doc.setFont("helvetica", "bold"); doc.text(paddedQty, 104, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 127.5, y, { align: "center" });
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
       const rowHeight = (splitDesc.length * 4) + 1;
-      
-      if (index < itemsList.length - 1) {
-        doc.setLineWidth(0.1);
-        doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); 
-      }
-      
+      if (index < itemsList.length - 1) { doc.setLineWidth(0.1); doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); }
       y += rowHeight + 2; 
     });
-
-    const tableBottom = Math.max(y - 1, 165);
-
-    doc.setFillColor(235, 235, 235);
-    doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
-
-    doc.setLineWidth(0.4);
-    doc.line(5, tableBottom, 143, tableBottom); 
-    
-    doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" });
-    doc.text(String(totalNos).padStart(2, '0'), 104, tableBottom + 4.2, { align: "center" });
-    
-    doc.line(5, tableBottom + 6, 143, tableBottom + 6); 
-
-    doc.line(15, tableTop, 15, tableBottom + 6); 
-    doc.line(97, tableTop, 97, tableBottom + 6); 
-    doc.line(112, tableTop, 112, tableBottom + 6); 
-
-    const sigY = 183; 
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "bold");
-    doc.text("Receiver's Signature / Stamp", 8, sigY);
-    
+    const tableBottom = Math.max(y - 1, 165); doc.setFillColor(235, 235, 235); doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
+    doc.setLineWidth(0.4); doc.line(5, tableBottom, 143, tableBottom); doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 104, tableBottom + 4.2, { align: "center" });
+    doc.line(5, tableBottom + 6, 143, tableBottom + 6); doc.line(15, tableTop, 15, tableBottom + 6); doc.line(97, tableTop, 97, tableBottom + 6); doc.line(112, tableTop, 112, tableBottom + 6); 
+    const sigY = 183; doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-      doc.setTextColor(0, 128, 0); 
-      doc.setFont("helvetica", "italic");
-      doc.setFontSize(10);
-      doc.text("Digitally Verified", 8, sigY + 6);
-      doc.setTextColor(0, 0, 0); 
+      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); doc.setTextColor(0, 0, 0); 
     }
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
-    
-    doc.setTextColor(0, 51, 153); 
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(10);
-    doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-    
-    doc.setTextColor(0, 0, 0);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(6);
-    doc.text(`Auth: ${formatDate()} ${formatTime()}`, 140, sigY + 4, { align: "right" });
-    
-    doc.setLineWidth(0.4);
-    doc.rect(5, 5, 138, 195); 
-
-    doc.save(`${challanNo}.pdf`);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
+    doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate()} ${formatTime()}`, 140, sigY + 4, { align: "right" });
+    doc.setLineWidth(0.4); doc.rect(5, 5, 138, 195); doc.save(`${challanNo}.pdf`);
   };
 
+  // --- EXCEL ENGINE ---
   const downloadLedger = () => {
-    if(ledgerData.length === 0) { alert("No data to export"); return; }
-    
-    const dispatchedDataObj = {};
-    const returnsDataObj = {};
-    
+    if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
+    const dispatchedDataObj = {}; const returnsDataObj = {};
     ledgerData.forEach(row => {
       const key = row.challan_no || row.group_id;
       if (row.status === 'RETURN_ACCEPTED') {
@@ -549,42 +311,35 @@ export default function App() {
 
     const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
     const returnGroups = Object.values(returnsDataObj);
-
     const itemSummary = {};
+    
     ledgerData.forEach(row => {
-      const desc = row.item_desc.toUpperCase();
-      const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      const desc = row.item_desc.toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
-      
-      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q;
-      else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
     });
 
     const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
     const servoEntries = summaryEntries.filter(([_, data]) => data.category === 'SERVO');
     const tvsEntries = summaryEntries.filter(([_, data]) => data.category === 'TVS');
     
+    const exportTitle = `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${monthNames[ledgerMonth]} ${ledgerYear})`;
+
     let leftRowsFlat = [];
-    
-    leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${formatDate()})`, isReturn: false });
+    leftRowsFlat.push({ type: 'title', title: exportTitle, isReturn: false });
     leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: false });
     leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], isReturn: false });
 
     dispatchedGroups.forEach(group => {
-      let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
-      let groupTotal = 0;
+      let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; let groupTotal = 0;
       group.items.forEach((row, i) => {
-        const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
-        groupTotal += rawQty;
-        
+        const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; groupTotal += rawQty;
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
-          challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(),
-          nos: String(rawQty).padStart(2, '0'),
+          challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(), nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          adminNote: group.admin_note || '', 
-          color: bgColor, qtyColor: 'color: #000;' 
+          adminNote: group.admin_note || '', color: bgColor, qtyColor: 'color: #000;' 
         });
       });
       leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
@@ -592,24 +347,20 @@ export default function App() {
 
     if (returnGroups.length > 0) {
       leftRowsFlat.push({ type: 'empty' });
-      leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - RETURN LEDGER (${formatDate()})`, isReturn: true });
+      leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - RETURN LEDGER (${monthNames[ledgerMonth]} ${ledgerYear})`, isReturn: true });
       leftRowsFlat.push({ type: 'subtitle', title: `RETURNED BY: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: true });
       leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'RETURN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'REMARKS / NOTE'], isReturn: true });
 
       returnGroups.forEach(group => {
-        let bgColor = "#fee2e2"; 
-        let groupTotal = 0;
+        let bgColor = "#fee2e2"; let groupTotal = 0;
         group.items.forEach((row, i) => {
-          const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
-          groupTotal += rawQty;
+          const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; groupTotal += rawQty;
           leftRowsFlat.push({
             type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
             date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
-            challan: row.challan_no || '-', desc: row.item_desc.toUpperCase(),
-            nos: String(rawQty).padStart(2, '0'),
+            challan: row.challan_no || '-', desc: row.item_desc.toUpperCase(), nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-            note: row.note || '',
-            color: bgColor, qtyColor: 'color: #dc2626;' 
+            note: row.note || '', color: bgColor, qtyColor: 'color: #dc2626;' 
           });
         });
         leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: true });
@@ -623,120 +374,67 @@ export default function App() {
     
     if (servoEntries.length > 0) {
         rightRowsFlat.push({ type: 'group_title', title: 'SERVO LUBRICANTS' });
-        servoEntries.forEach(([desc, data]) => {
-           rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() });
-        });
+        servoEntries.forEach(([desc, data]) => { rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() }); });
     }
-
     if (tvsEntries.length > 0) {
         rightRowsFlat.push({ type: 'group_title', title: 'TVS TYRES & TUBES' });
-        tvsEntries.forEach(([desc, data]) => {
-           rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() });
-        });
+        tvsEntries.forEach(([desc, data]) => { rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() }); });
     }
 
     const maxRows = Math.max(leftRowsFlat.length, rightRowsFlat.length);
-
-    let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="UTF-8"></head><body>`;
-    
+    let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`;
     html += `<table border="0" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; border-collapse: collapse; font-size: 13px; white-space: nowrap;">`;
-    
-    html += `<colgroup>
-        <col width="130" />
-        <col width="110" />
-        <col width="380" />
-        <col width="50" />
-        <col width="130" />
-        <col width="180" />
-        <col width="30" />
-        <col width="380" />
-        <col width="80" />
-        <col width="140" />
-    </colgroup>`;
+    html += `<colgroup><col width="130" /><col width="110" /><col width="380" /><col width="50" /><col width="130" /><col width="180" /><col width="30" /><col width="380" /><col width="80" /><col width="140" /></colgroup>`;
 
     for(let i=0; i<maxRows; i++) {
       html += `<tr style="height: 35px;">`;
-      
       if (i < leftRowsFlat.length) {
-        const l = leftRowsFlat[i];
-        const spanLimit = 6;
-
-        if (l.type === 'title') {
-            html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-        } else if (l.type === 'subtitle') {
-            html += `<td colspan="${spanLimit}" style="background-color: #f3f4f6; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-        } else if (l.type === 'header') {
-            l.cols.forEach((col, idx) => {
-                const align = (idx === 2) ? 'left' : 'center'; 
-                html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`;
-            });
+        const l = leftRowsFlat[i]; const spanLimit = 6;
+        if (l.type === 'title') { html += `<td colspan="${spanLimit}" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
+        } else if (l.type === 'subtitle') { html += `<td colspan="${spanLimit}" style="background-color: #f3f4f6; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
+        } else if (l.type === 'header') { l.cols.forEach((col, idx) => { const align = (idx === 2) ? 'left' : 'center'; html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`; });
         } else if (l.type === 'data') {
             if (l.isFirst) {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
-        }
-        
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
-        html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
-
-        if (l.isReturn) {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
-        } else {
-            if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`;
-        }
+            }
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
+            if (l.isReturn) { if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
+            } else { if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`; }
         } else if (l.type === 'total') {
             html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">TOTAL:</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-        } else if (l.type === 'empty') {
-            html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
-        }
-      } else {
-        html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6);
-      }
+            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td><td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
+        } else if (l.type === 'empty') { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6); }
+      } else { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6); }
 
       html += `<td style="border: none; background-color: transparent; width: 30px;"></td>`;
 
       if (i < rightRowsFlat.length) {
         const r = rightRowsFlat[i];
-        if (r.type === 'title') {
-            html += `<td colspan="3" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
-        } else if (r.type === 'subtitle') {
-            html += `<td colspan="3" style="background-color: #ffffff; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
-        } else if (r.type === 'header') {
-            r.cols.forEach((col, idx) => {
-                const align = (idx === 0) ? 'left' : 'center';
-                html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`;
-            });
-        } else if (r.type === 'group_title') {
-            html += `<td colspan="3" style="background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
+        if (r.type === 'title') { html += `<td colspan="3" style="background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
+        } else if (r.type === 'subtitle') { html += `<td colspan="3" style="background-color: #ffffff; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
+        } else if (r.type === 'header') { r.cols.forEach((col, idx) => { const align = (idx === 0) ? 'left' : 'center'; html += `<td style="background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`; });
+        } else if (r.type === 'group_title') { html += `<td colspan="3" style="background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
             html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.nos}</td>`;
             html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;">${r.qty}</td>`;
         }
-      } else {
-        html += `<td style="border: none; background-color: transparent;"></td>`.repeat(3);
-      }
-      
+      } else { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(3); }
       html += `</tr>`;
     }
-
     html += `</table></body></html>`;
 
-    const blob = new Blob([html], { type: "application/vnd.ms-excel" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
-    document.body.appendChild(a); 
-    a.click();
-    document.body.removeChild(a);
+    // REVERTED: Filename is back to manual date-based naming
+    const blob = new Blob([html], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
+  // --- ACTIONS & HANDLERS ---
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...');
     const reader = new FileReader();
@@ -748,15 +446,14 @@ export default function App() {
           const sheet = workbook.SheetNames.find(s => s.toUpperCase() === sheetName);
           if (sheet) {
             const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
-              const norm = normalizeRow(row); 
-              return { description: norm.description, ratio: norm.ratio || 1, category: sheetName };
+              const norm = normalizeRow(row); return { description: norm.description, ratio: norm.ratio || 1, category: sheetName };
             }).filter(item => item.description);
             finalItemsToUpload = [...finalItemsToUpload, ...formatted];
           }
         });
         await supabase.from('master_items').delete().neq('description', 'dummy'); 
         await supabase.from('master_items').insert(finalItemsToUpload);
-        setUploadStatus(`${finalItemsToUpload.length} SKUs AVAILABLE`); fetchMasterItems();
+        refreshAllData();
       } catch (error) { setUploadStatus(`Error`); }
     };
     reader.readAsArrayBuffer(file); 
@@ -764,30 +461,15 @@ export default function App() {
 
   const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix) => {
     if (e.key === 'ArrowDown') { 
-      e.preventDefault(); 
-      setHighlightIndex(p => {
-        const next = p < itemsList.length - 1 ? p + 1 : p;
-        document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' });
-        return next;
-      }); 
-    } 
-    else if (e.key === 'ArrowUp') { 
-      e.preventDefault(); 
-      setHighlightIndex(p => {
-        const next = p > 0 ? p - 1 : 0;
-        document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' });
-        return next;
-      }); 
-    } 
-    else if (e.key === 'Enter') {
-      e.preventDefault(); if (highlightIndex >= 0 && itemsList[highlightIndex]) {
-        handleItemSelect(itemsList[highlightIndex], setSelected, setUnitState, setSearch, setDropdownOpen);
-      }
+      e.preventDefault(); setHighlightIndex(p => { const next = p < itemsList.length - 1 ? p + 1 : p; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); 
+    } else if (e.key === 'ArrowUp') { 
+      e.preventDefault(); setHighlightIndex(p => { const next = p > 0 ? p - 1 : 0; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); 
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); if (highlightIndex >= 0 && itemsList[highlightIndex]) handleItemSelect(itemsList[highlightIndex], setSelected, setUnitState, setSearch, setDropdownOpen);
     }
   };
 
   const retailFilteredItems = smartSearch(retailSearch);
-
   const addToRetailCart = (e) => {
     e.preventDefault(); if (!retailSelectedItem || !retailQty) return;
     setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: retailQty, unit: retailSelectedUnit }]);
@@ -797,27 +479,15 @@ export default function App() {
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
   const submitRetailAction = async () => {
-    if (retailCart.length === 0) return; 
-    const isReturn = retailMode === 'RETURN';
-    const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
+    if (retailCart.length === 0) return; const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
     const tx = retailCart.map(item => ({ 
-      group_id: groupId, 
-      item_desc: item.description, 
-      req_qty: parseInt(item.req_qty), 
-      unit: item.unit, 
-      status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
-      challan_no: isReturn ? groupId : null,
-      note: isReturn ? retailReturnNote : null
+      group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
+      unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
+      challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
     }));
     const { error } = await supabase.from('transactions').insert(tx);
-    if (error) {
-      alert(`Submission Error: ${error.message}`);
-    } else { 
-      alert(`${isReturn ? 'Return' : 'P.O.'} Submitted: ${groupId}`); 
-      setRetailCart([]); 
-      setRetailReturnNote('');
-      fetchPendingPOs(); 
-      fetchPendingReturns();
+    if (error) { alert(`Error: ${error.message}`); } else { 
+      alert(`${isReturn ? 'Return' : 'P.O.'} Submitted: ${groupId}`); setRetailCart([]); setRetailReturnNote(''); refreshAllData();
     }
   };
 
@@ -828,19 +498,12 @@ export default function App() {
   const toggleVerifyCheck = (index) => setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
 
   const acceptDelivery = async () => {
-    if (!verifyModal) return;
-    const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
+    if (!verifyModal) return; const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     const { error } = await supabase.from('transactions').update({ status: newStatus }).eq('challan_no', verifyModal.challanNo);
-    if (!error) { 
-      setVerifyModal(null); 
-      fetchIncomingDeliveries(); 
-      fetchPendingReturns();
-      fetchLedger(); 
-    }
+    if (!error) { setVerifyModal(null); refreshAllData(); }
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
-  
   const addToDepotCart = (e) => {
     e.preventDefault(); if (!selectedItem || !qty) return;
     setDepotCart([...depotCart, { ...selectedItem, disp_qty: qty, unit: selectedUnit }]); setSearchQuery(''); setQty(''); setSelectedItem(null);
@@ -849,204 +512,91 @@ export default function App() {
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
   const submitDepotAction = async (e) => {
-    e.preventDefault();
-    if (depotCart.length === 0) return;
+    e.preventDefault(); if (depotCart.length === 0) return;
     if (depotMode === 'DISPATCH') {
-      generateManualChallan();
+      const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
+      const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
+      const { error } = await supabase.from('transactions').insert(tx);
+      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); fetchPendingData(); }
     } else {
       const groupId = await getNextSequence('RR');
       const tx = depotCart.map(item => ({ 
-        group_id: groupId, 
-        item_desc: item.description, 
-        req_qty: parseInt(item.disp_qty), 
-        unit: item.unit, 
-        status: 'RETURN_REQUESTED',
-        note: depotReturnNote 
+        group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
+        unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
       }));
       const { error } = await supabase.from('transactions').insert(tx);
-      if (error) {
-        alert(`Submission Error: ${error.message}`);
-      } else { 
-        alert(`Return Request Submitted: ${groupId}`); 
-        setDepotCart([]); 
-        setDepotReturnNote('');
-        fetchPendingDepotReturns(); 
-      }
+      if (!error) { alert(`Return Request Submitted: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); fetchPendingData(); }
     }
   };
 
-  const generateManualChallan = async () => {
-    const challanNo = await getNextSequence('CN'); 
-    const groupId = 'MANUAL-' + Date.now();
-    const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-    const { error } = await supabase.from('transactions').insert(tx);
-    if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); fetchIncomingDeliveries(); }
-  };
-
-  const openEditPOModal = (groupId, items) => {
-    setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) });
-  };
-  const handleEditPOQty = (index, val) => {
-    const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated });
-  };
+  const openEditPOModal = (groupId, items) => { setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
-    if (!editPOModal) return;
-    const challanNo = await getNextSequence('CN');
-    const backorders = [];
-    const printItems = [];
-
+    if (!editPOModal) return; const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
     for (const item of editPOModal.items) {
-      const dispatchQty = parseInt(item.edit_qty) || 0;
-      const reqQty = parseInt(item.req_qty);
-
-      // DELETION LOGIC (Q=0)
-      if (dispatchQty === 0) {
-        await supabase.from('transactions').delete().eq('id', item.id);
-        continue; 
-      }
-
-      if (dispatchQty > 0) {
-        await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id);
-        printItems.push({ ...item, disp_qty: dispatchQty });
-      }
-
-      if (dispatchQty < reqQty) {
-        const diff = reqQty - dispatchQty;
-        const newPO = await getNextSequence('PO');
-        backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: diff, unit: item.unit, status: 'PO_PLACED' });
-      }
+      const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
+      if (dispatchQty === 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+      if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
+      if (dispatchQty < reqQty) { const newPO = await getNextSequence('PO'); backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); }
     }
-
     if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
     if (printItems.length > 0) printPDF(challanNo, printItems);
-    
-    setEditPOModal(null); fetchPendingPOs(); fetchIncomingDeliveries();
+    setEditPOModal(null); refreshAllData();
   };
 
-  const openProcessReturnModal = (groupId, items) => {
-    setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) });
-  };
-  const handleProcessReturnQty = (index, val) => {
-    const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated });
-  };
+  const openProcessReturnModal = (groupId, items) => { setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
-    if (!processReturnModal) return;
-    const challanNo = await getNextSequence('RT');
-    const backorders = [];
-    const printItems = [];
-
+    if (!processReturnModal) return; const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
     for (const item of processReturnModal.items) {
-      const dispatchQty = parseInt(item.edit_qty) || 0;
-      const reqQty = parseInt(item.req_qty);
-
-      // DELETION LOGIC (Q=0)
-      if (dispatchQty === 0) {
-        await supabase.from('transactions').delete().eq('id', item.id);
-        continue; 
-      }
-
-      if (dispatchQty > 0) {
-        await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id);
-        printItems.push({ ...item, disp_qty: dispatchQty });
-      }
-
-      if (dispatchQty < reqQty) {
-        const diff = reqQty - dispatchQty;
-        const newRR = await getNextSequence('RR');
-        backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: diff, unit: item.unit, status: 'RETURN_REQUESTED' });
-      }
+      const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
+      if (dispatchQty === 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+      if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
+      if (dispatchQty < reqQty) { const newRR = await getNextSequence('RR'); backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); }
     }
-
     if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
     if (printItems.length > 0) printPDF(challanNo, printItems);
-    
-    setProcessReturnModal(null); fetchPendingDepotReturns(); fetchPendingReturns();
+    setProcessReturnModal(null); refreshAllData();
   };
 
-  // --- UI RENDERING ---
-
-  if (loadingAuth) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-200">
-        <p className="text-xl font-bold animate-pulse text-gray-800">Authenticating System...</p>
+  // --- UI RENDER ---
+  if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold">LOADING SYSTEM...</div>;
+  if (!session) return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans">
+      <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full">
+        <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2">GOD LOGIN</h2>
+        <form onSubmit={handleLogin} className="space-y-4">
+          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none" required />
+          <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
+          {loginError && <p className="text-red-600 font-bold text-center text-xs uppercase">{loginError}</p>}
+        </form>
       </div>
-    );
-  }
-
-  if (!session) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans">
-        <div className="w-full max-w-sm bg-gray-100 border-2 border-black p-8 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-          <h2 className="text-2xl font-black text-center border-b-2 border-black pb-3 mb-6 uppercase">System Login</h2>
-          
-          {loginError && (
-            <div className="bg-red-200 text-red-900 border-2 border-red-900 p-2 font-bold text-sm mb-4 text-center">
-              {loginError}
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-bold text-gray-800 mb-1 uppercase text-center">Enter Worker Name</label>
-              <input
-                type="text"
-                autoFocus
-                value={workerName}
-                onChange={(e) => setWorkerName(e.target.value)}
-                className="w-full border-2 border-black p-3 font-bold text-center uppercase focus:bg-yellow-50 focus:outline-none text-lg"
-                placeholder="Enter your Name"
-                required
-              />
-            </div>
-            <button 
-              type="submit" 
-              disabled={isLoggingIn}
-              className={`w-full bg-black hover:bg-gray-800 text-white py-4 font-bold uppercase border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] mt-2 transition-all ${isLoggingIn ? 'opacity-60 cursor-not-allowed shadow-none translate-y-1' : 'active:translate-y-1 active:shadow-none'}`}
-            >
-              {isLoggingIn ? 'VERIFYING...' : 'Access System'}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  const renderNav = () => (
-    <nav className="bg-gray-800 text-white border-b-2 border-black sticky top-0 z-50">
-      <div className="container mx-auto px-4 py-2.5 flex justify-between items-center text-sm">
-        <div className="font-bold uppercase tracking-wider text-base">Gujarat Oil Depot</div>
-        <div className="flex space-x-2 items-center">
-          {userRole === 'admin' && (
-            <>
-              <button onClick={() => setView('depot')} className={`px-2 py-1 font-bold rounded-sm border ${view === 'depot' ? 'bg-white text-black border-gray-300' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>OIL DEPOT</button>
-              <button onClick={() => setView('retail')} className={`px-2 py-1 font-bold rounded-sm border ${view === 'retail' ? 'bg-white text-black border-gray-300' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>RETAIL STORE</button>
-              <button onClick={() => setView('admin')} className={`px-2 py-1 font-bold rounded-sm border ${view === 'admin' ? 'bg-white text-black border-gray-300' : 'bg-gray-700 border-gray-600 hover:bg-gray-600'}`}>ADMIN</button>
-            </>
-          )}
-          
-          {userRole !== 'admin' && (
-            <span className="ml-2 bg-slate-900 px-2 py-1 rounded text-[10px] font-bold text-blue-300 border border-slate-600 uppercase">
-              {userRole === 'depot' ? 'OIL DEPOT' : userRole === 'retail' ? 'RETAIL STORE' : userRole || 'USER'}
-            </span>
-          )}
-
-          <button onClick={handleLogout} className="ml-2 bg-red-600 hover:bg-red-700 px-3 py-1 rounded-sm text-xs font-bold transition-colors border border-red-800">
-            LOG OUT
-          </button>
-        </div>
-      </div>
-    </nav>
+    </div>
   );
 
   return (
-    <div className="min-h-screen bg-gray-200 font-sans text-gray-900 selection:bg-blue-200">
-      {renderNav()}
+    <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200">
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs">
+          <span className="tracking-widest">Gujarat Oil Depot</span>
+          <div className="flex gap-2">
+            {userRole === 'admin' && (
+              <div className="bg-gray-700 p-1 flex gap-1 rounded">
+                <button onClick={() => setView('depot')} className={`px-2 py-1 ${view === 'depot' ? 'bg-white text-black' : ''}`}>DEPOT</button>
+                <button onClick={() => setView('retail')} className={`px-2 py-1 ${view === 'retail' ? 'bg-white text-black' : ''}`}>RETAIL</button>
+                <button onClick={() => setView('admin')} className={`px-2 py-1 ${view === 'admin' ? 'bg-white text-black' : ''}`}>ADMIN</button>
+              </div>
+            )}
+            <button onClick={() => supabase.auth.signOut()} className="bg-red-600 px-3 py-1 border border-black hover:bg-red-700">LOGOUT</button>
+          </div>
+        </div>
+      </nav>
 
-      <main className="container mx-auto p-3">
+      <main className="container mx-auto p-4">
         {verifyModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-base font-bold border-b-2 border-black pb-3 mb-4 uppercase">VERIFY GOODS: {verifyModal.challanNo}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
@@ -1067,36 +617,36 @@ export default function App() {
         )}
 
         {editPOModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-base font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
                 <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-sm font-bold text-gray-600 w-20 text-center">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
                     <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                   </div>
                 ))}
               </div>
-              <div className="flex space-x-3">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-sm font-bold hover:bg-blue-900">GENERATE CHALLAN</button>
+              <div className="flex space-x-2">
+                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
               </div>
             </div>
           </div>
         )}
 
         {processReturnModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-base font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
                 <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-sm font-bold text-gray-600 w-20 text-center">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
                     <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                   </div>
@@ -1110,20 +660,130 @@ export default function App() {
           </div>
         )}
 
-        {/* === TERMINAL VIEWS === */}
+        {view === 'admin' && isAdminAuth && (
+          <div className="space-y-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
+              <div className="flex items-center gap-4">
+                <span className="font-black text-sm uppercase">{uploadStatus}</span>
+                <label className="bg-gray-200 border border-black hover:bg-gray-300 px-3 py-1 rounded-sm text-xs font-bold cursor-pointer">
+                  UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
+                </label>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase mr-1">Ledger Month:</span>
+                <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1 text-xs font-bold uppercase focus:outline-none cursor-pointer">
+                  {monthNames.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                </select>
+                <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1 text-xs font-bold uppercase focus:outline-none cursor-pointer">
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 py-1.5 font-bold text-xs ml-2">EXPORT EXCEL</button>
+              </div>
+            </div>
 
-        {view === 'unassigned' && (
-          <div className="flex items-center justify-center mt-20">
-            <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
-              <h2 className="text-xl font-black text-red-800 mb-2">NO TERMINAL ASSIGNED</h2>
-              <p className="font-bold text-gray-800 text-sm">Your account does not have a valid role (Depot, Retail, or Admin) assigned in the database.</p>
+            <div className="bg-white border-2 border-black overflow-hidden shadow-sm">
+              <div className="max-h-[65vh] overflow-y-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm">
+                    <tr>
+                      <th className="p-3 border-r border-gray-300 w-32 text-center">DATE / TIME</th>
+                      <th className="p-3 border-r border-gray-300 w-48">CHALLAN & NOTES</th>
+                      <th className="p-3 border-r border-gray-300">DESCRIPTION</th>
+                      <th className="p-3 text-center">NOS / QTY</th>
+                      <th className="p-3 text-center w-16">PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(ledgerData.reduce((acc, row) => {
+                      const key = row.challan_no || row.group_id; 
+                      if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
+                      if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
+                      acc[key].items.push(row); return acc;
+                    }, {})).length === 0 ? (
+                      <tr><td colSpan="5" className="p-6 text-center text-gray-500 font-bold uppercase">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
+                    ) : Object.values(ledgerData.reduce((acc, row) => {
+                      const key = row.challan_no || row.group_id; 
+                      if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
+                      if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
+                      acc[key].items.push(row); return acc;
+                    }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
+                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'}`}>
+                        <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
+                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal">{formatTime(group.timestamp)}</span>
+                        </td>
+                        <td className="p-3 border-r border-gray-300">
+                          <div className="font-black mb-2 text-[13px]">{group.challan_no || 'PENDING'}</div>
+                          
+                          {/* MINIMIZED ADMIN NOTE */}
+                          {group.status !== 'RETURN_ACCEPTED' && (
+                            <div className="relative mt-2">
+                              {openNoteId === group.keyValue ? (
+                                <div className="absolute left-0 top-0 bg-white border border-gray-400 p-2 shadow-xl z-20 w-48 rounded">
+                                  <textarea
+                                    className="w-full border border-gray-300 p-1.5 text-[11px] font-bold focus:outline-none focus:border-black resize-none"
+                                    rows="3"
+                                    value={tempNoteText}
+                                    onChange={(e) => setTempNoteText(e.target.value)}
+                                    placeholder="Enter note..."
+                                    autoFocus
+                                  />
+                                  <div className="flex gap-2 mt-2">
+                                    <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-black text-white px-2 py-1.5 text-[9px] font-bold uppercase flex-1 border border-black hover:bg-gray-800">SAVE</button>
+                                    <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-[9px] font-bold uppercase flex-1 border border-gray-400 hover:bg-gray-300">CANCEL</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-start gap-1">
+                                  <button 
+                                    onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
+                                    className={`text-[9px] px-2 py-1 border rounded transition-colors shadow-sm font-bold uppercase ${group.admin_note ? 'bg-blue-100 text-blue-800 border-blue-400 hover:bg-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}
+                                  >
+                                    {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
+                                  </button>
+                                  {group.admin_note && <div className="text-[10px] text-gray-700 italic break-words max-w-full leading-tight pr-2">{group.admin_note}</div>}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 border-r border-gray-300">
+                          {group.items.map((i, k) => <div key={k} className="font-bold border-b border-gray-200 last:border-0 py-1 uppercase">{i.item_desc}</div>)}
+                        </td>
+                        <td className="p-3 border-r border-gray-300 text-center">
+                          {group.items.map((i, k) => (
+                            <div key={k} className={`py-1 font-black border-b border-gray-200 last:border-0 ${group.status === 'RETURN_ACCEPTED' ? 'text-red-700' : 'text-black'}`}>
+                              {group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty} <span className="text-[9px] font-bold text-gray-500 ml-1">{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</span>
+                            </div>
+                          ))}
+                        </td>
+                        <td className="p-3 text-center vertical-middle">
+                          {group.challan_no && isWithin30Days(group.timestamp) ? (
+                            <button onClick={() => {
+                                const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
+                                printPDF(group.challan_no, fullChallanItems);
+                              }} 
+                              className="text-[9px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 py-1 rounded shadow-sm"
+                            >
+                              PDF
+                            </button>
+                          ) : group.challan_no ? (
+                            <span className="text-[9px] text-gray-400 font-bold">LOCKED</span>
+                          ) : (
+                            <span className="text-gray-300">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
         {view === 'depot' && (
           <div className="flex flex-col-reverse md:grid md:grid-cols-2 gap-4 items-start">
-            
             <div className="w-full space-y-4">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
@@ -1132,7 +792,7 @@ export default function App() {
                 </div>
                 <div className="p-3">
                   {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-4">NO PENDING ORDERS</p> : (
-                    <div className="space-y-3">
+                    <div className="space-y-3 max-h-[60vh] overflow-y-auto">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
                         <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-3">
                           <div className="font-bold text-xs mb-2 text-gray-600 border-b border-gray-200 pb-1">{groupId}</div>
@@ -1140,7 +800,7 @@ export default function App() {
                             <tbody>
                               {items.map((item, idx) => (
                                 <tr key={idx} className="border-b border-gray-300 last:border-0">
-                                  <td className="py-2 pr-2 font-medium text-gray-800">{item.item_desc}</td>
+                                  <td className="py-2 pr-2 font-medium text-gray-800 uppercase">{item.item_desc}</td>
                                   <td className="py-2 text-right font-bold w-32 whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</td>
                                 </tr>
                               ))}
@@ -1166,7 +826,7 @@ export default function App() {
                         <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-3">
                           <div className="flex justify-between items-center mb-3 border-b-2 border-red-200 pb-2">
                             <span className="font-bold text-sm text-red-900">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100 active:translate-y-px">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
                           <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-xs py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
@@ -1177,12 +837,12 @@ export default function App() {
               </div>
             </div>
 
-            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col sticky top-[60px]">
               <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
                 <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
                 <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
               </div>
-              <div className="p-3 flex-1 flex flex-col">
+              <div className="p-3 flex-1 flex flex-col min-h-[60vh]">
                 {depotCart.length > 0 && (
                   <div className={`${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-300'} border-2 p-3 mb-4`}>
                     <table className="w-full border-collapse mb-3 text-sm">
@@ -1191,7 +851,7 @@ export default function App() {
                           <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-100' : 'border-blue-200 hover:bg-blue-100'} last:border-0`}>
                             <td className="py-2 flex items-center gap-2">
                               <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                              <span className="font-bold text-gray-900">{item.description}</span>
+                              <span className="font-bold text-gray-900 uppercase">{item.description}</span>
                             </td>
                             <td className="py-2 text-right w-40">
                               <div className="flex items-center justify-end gap-1">
@@ -1204,13 +864,7 @@ export default function App() {
                       </tbody>
                     </table>
                     {depotMode === 'RETURN_REQUEST' && (
-                      <input 
-                        type="text" 
-                        value={depotReturnNote} 
-                        onChange={(e) => setDepotReturnNote(e.target.value)} 
-                        placeholder="ADD RETURN REMARKS / NOTE (OPTIONAL)" 
-                        className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" 
-                      />
+                      <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
                     )}
                     <button onClick={submitDepotAction} className={`w-full text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                       {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
@@ -1225,7 +879,7 @@ export default function App() {
                       <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
                       {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
                         <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                          {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
+                          {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
                         </div>
                       )}
                     </div>
@@ -1238,8 +892,7 @@ export default function App() {
                         <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
                         {selectedItem?.category === 'TVS' ? (
                            <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
-                              <option value="PCS">PCS</option>
-                              <option value="SET">SET</option>
+                              <option value="PCS">PCS</option><option value="SET">SET</option>
                            </select>
                         ) : (
                            <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
@@ -1270,7 +923,7 @@ export default function App() {
                         <div key={challanNo} className="border-2 border-gray-300 bg-gray-50 p-3">
                           <div className="flex justify-between items-center mb-3 border-b-2 border-gray-200 pb-2">
                             <span className="font-bold text-sm text-gray-900">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100 active:translate-y-px">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
                           <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-green-700 hover:bg-green-800 text-white font-bold text-xs py-2.5 border-2 border-green-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
                         </div>
@@ -1288,7 +941,7 @@ export default function App() {
                           <div className="font-bold text-[10px] text-red-800 mb-1">{groupId}</div>
                           {items.map((item, idx) => (
                             <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                              <span className="truncate pr-2 font-bold">{item.item_desc}</span>
+                              <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
                               <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                             </div>
                           ))}
@@ -1302,13 +955,13 @@ export default function App() {
                 <div>
                   <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">BACKORDERS / PROCESSING</h3>
                   {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING POs</p> : (
-                    <div className="space-y-3">
+                    <div className="space-y-3 max-h-[40vh] overflow-y-auto">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
                         <div key={groupId} className="border border-orange-300 bg-orange-50 p-2">
                           <div className="font-bold text-[10px] text-orange-800 mb-1">{groupId}</div>
                           {items.map((item, idx) => (
                             <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                              <span className="truncate pr-2 font-bold">{item.item_desc}</span>
+                              <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
                               <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                             </div>
                           ))}
@@ -1317,16 +970,15 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
               </div>
             </div>
 
-            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col sticky top-[60px]">
               <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
                 <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
                 <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
               </div>
-              <div className="p-3 flex-1 flex flex-col">
+              <div className="p-3 flex-1 flex flex-col min-h-[60vh]">
                 {retailCart.length > 0 && (
                   <div className={`${retailMode === 'RETURN' ? 'bg-red-50 border-red-300' : 'bg-green-50 border-green-300'} border-2 p-3 mb-4`}>
                     <table className="w-full border-collapse mb-3 text-sm">
@@ -1335,7 +987,7 @@ export default function App() {
                           <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-100' : 'border-green-200 hover:bg-green-100'} last:border-0`}>
                             <td className="py-2 flex items-center gap-2">
                               <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                              <span className="font-bold text-gray-900">{item.description}</span>
+                              <span className="font-bold text-gray-900 uppercase">{item.description}</span>
                             </td>
                             <td className="py-2 text-right w-40">
                                <div className="flex items-center justify-end gap-1">
@@ -1348,13 +1000,7 @@ export default function App() {
                       </tbody>
                     </table>
                     {retailMode === 'RETURN' && (
-                      <input 
-                        type="text" 
-                        value={retailReturnNote} 
-                        onChange={(e) => setRetailReturnNote(e.target.value)} 
-                        placeholder="ADD RETURN REMARKS / NOTE (OPTIONAL)" 
-                        className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" 
-                      />
+                      <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
                     )}
                     <button onClick={submitRetailAction} className={`w-full text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
                       {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
@@ -1369,7 +1015,7 @@ export default function App() {
                       <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
                       {retailSearch.length > 0 && isRetailDropdownOpen && (
                         <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                          {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
+                          {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
                         </div>
                       )}
                     </div>
@@ -1382,8 +1028,7 @@ export default function App() {
                         <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
                         {retailSelectedItem?.category === 'TVS' ? (
                            <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
-                              <option value="PCS">PCS</option>
-                              <option value="SET">SET</option>
+                              <option value="PCS">PCS</option><option value="SET">SET</option>
                            </select>
                         ) : (
                            <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
@@ -1397,205 +1042,6 @@ export default function App() {
                 </form>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ADMIN SCREEN */}
-        {view === 'admin' && isAdminAuth && (
-          <div className="bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-              <div className="p-3 space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="bg-gray-100 border-2 border-gray-300 p-3 flex justify-between items-center">
-                    <div>
-                      <div className="font-bold text-sm text-gray-800">Item Register</div>
-                      <div className="text-[10px] font-bold text-gray-600 mt-1 uppercase">{uploadStatus}</div>
-                    </div>
-                    <label className="bg-white border-2 border-gray-400 hover:bg-gray-200 px-4 py-2 rounded-sm text-xs font-bold cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">
-                      UPLOAD EXCEL <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
-                    </label>
-                  </div>
-                  <div className="bg-gray-100 border-2 border-gray-300 p-3 flex justify-between items-center">
-                    <div>
-                      <div className="font-bold text-sm text-gray-800">Export Ledger</div>
-                      <div className="text-[10px] font-bold text-gray-600 mt-1">Excel File</div>
-                    </div>
-                    <button onClick={downloadLedger} className="bg-blue-800 hover:bg-blue-900 text-white font-bold px-4 py-2 border-2 border-blue-900 text-xs shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">DOWNLOAD</button>
-                  </div>
-                </div>
-
-                <div className="border-2 border-gray-400 bg-white shadow-sm">
-                  <div className="overflow-x-auto max-h-[60vh]">
-                    <table className="w-full text-left border-collapse whitespace-nowrap text-sm">
-                      <thead className="sticky top-0 bg-gray-100 z-10 shadow-[0_1px_2px_rgba(0,0,0,0.1)]">
-                        <tr className="text-gray-800 border-b-2 border-gray-400">
-                          <th className="p-3 font-bold border-r border-gray-300 w-24 text-center">DATE / TIME</th>
-                          <th className="p-3 font-bold border-r border-gray-300">CHALLAN NO</th>
-                          <th className="p-3 font-bold border-r border-gray-300 w-1/2">ITEM DESCRIPTION</th>
-                          <th className="p-3 font-bold text-center border-r border-gray-300">NOS</th>
-                          <th className="p-3 font-bold border-r border-gray-300 text-center">QTY</th>
-                          <th className="p-3 font-bold text-center">ACTION</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Object.values(
-                          ledgerData.reduce((acc, row) => {
-                            const key = row.challan_no || row.group_id; 
-                            if (!acc[key]) {
-                                acc[key] = { 
-                                    date: row.timestamp, 
-                                    challan_no: row.challan_no, 
-                                    group_id: row.group_id, 
-                                    status: row.status, 
-                                    items: [], 
-                                    admin_note: row.admin_note || '', 
-                                    keyField: row.challan_no ? 'challan_no' : 'group_id', 
-                                    keyValue: key 
-                                };
-                            }
-                            if (row.admin_note && !acc[key].admin_note) {
-                                acc[key].admin_note = row.admin_note;
-                            }
-                            acc[key].items.push(row);
-                            return acc;
-                          }, {})
-                        ).sort((a, b) => new Date(b.date) - new Date(a.date)).length === 0 ? (
-                          <tr><td colSpan="6" className="p-6 text-center text-gray-500 font-bold text-sm">NO RECORDS FOUND</td></tr>
-                        ) : (
-                          Object.values(
-                            ledgerData.reduce((acc, row) => {
-                              const key = row.challan_no || row.group_id; 
-                              if (!acc[key]) {
-                                  acc[key] = { 
-                                      date: row.timestamp, 
-                                      challan_no: row.challan_no, 
-                                      group_id: row.group_id, 
-                                      status: row.status, 
-                                      items: [], 
-                                      admin_note: row.admin_note || '', 
-                                      keyField: row.challan_no ? 'challan_no' : 'group_id', 
-                                      keyValue: key 
-                                  };
-                              }
-                              if (row.admin_note && !acc[key].admin_note) {
-                                  acc[key].admin_note = row.admin_note;
-                              }
-                              acc[key].items.push(row);
-                              return acc;
-                            }, {})
-                          ).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => {
-                            
-                            let rowBg = "bg-white hover:bg-gray-50";
-                            if(group.status === "ACCEPTED") rowBg = "bg-green-50 hover:bg-green-100";
-                            else if(group.status === "RETURN_ACCEPTED") rowBg = "bg-red-50 hover:bg-red-100";
-                            else if(group.status === "DISPATCHED") rowBg = "bg-blue-50 hover:bg-blue-100";
-
-                            return (
-                              <tr key={idx} className={`border-b border-gray-200 ${rowBg} align-top`}>
-                                <td className="p-3 border-r border-gray-200 text-gray-900 font-bold text-xs text-center leading-tight">
-                                  {formatDate(group.date)}<br/><span className="text-gray-900 font-bold text-xs">{formatTime(group.date)}</span>
-                                </td>
-                                <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
-                                  {group.challan_no || '-'}
-                                  
-                                  {/* ADMIN NOTE UI SECTION (SHRUNK TO max-w-40/160px) */}
-                                  {group.status !== 'RETURN_ACCEPTED' && (
-                                    <div className="mt-3 bg-gray-50 border border-gray-300 p-2 shadow-inner rounded max-w-[160px]">
-                                      <div className="flex justify-between items-center mb-1">
-                                        <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">ADMIN NOTE</span>
-                                        {!editingNoteId || editingNoteId !== group.keyValue ? (
-                                          <button 
-                                            onClick={() => { setEditingNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                            className="text-[9px] text-blue-600 hover:text-blue-800 font-bold underline"
-                                          >
-                                            EDIT
-                                          </button>
-                                        ) : null}
-                                      </div>
-                                      
-                                      {editingNoteId === group.keyValue ? (
-                                        <div className="space-y-2">
-                                          <textarea
-                                            className="w-full border border-gray-400 p-1.5 text-[11px] font-bold focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none whitespace-pre-wrap break-words"
-                                            rows="3"
-                                            value={tempNoteText}
-                                            onChange={(e) => setTempNoteText(e.target.value)}
-                                            placeholder="ENTER NOTE..."
-                                            autoFocus
-                                          />
-                                          <div className="flex space-x-2">
-                                            <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1 text-[10px] font-bold uppercase hover:bg-blue-700 flex-1 rounded-sm shadow-sm">SAVE</button>
-                                            <button onClick={() => setEditingNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1 text-[10px] font-bold uppercase hover:bg-gray-300 flex-1 rounded-sm border border-gray-300 shadow-sm">CANCEL</button>
-                                          </div>
-                                        </div>
-                                      ) : (
-                                        <div className="min-h-[40px] text-[11px] font-bold text-gray-800 whitespace-pre-wrap break-words">
-                                          {group.admin_note ? group.admin_note : <span className="italic text-gray-400 font-normal">No note added.</span>}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-
-                                </td>
-                                <td className="p-3 border-r border-gray-200">
-                                  <ul className="space-y-1">
-                                    {group.items.map((item, i) => (
-                                      <li key={i} className="h-7 flex items-center text-sm font-bold text-gray-800">
-                                        <span className="w-1.5 h-1.5 bg-gray-400 rounded-full flex-shrink-0 mr-2"></span>
-                                        <span className="truncate max-w-[200px] md:max-w-[400px]" title={item.item_desc}>{item.item_desc}</span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </td>
-                                <td className="p-3 border-r border-gray-200 text-center">
-                                  <ul className="space-y-1">
-                                    {group.items.map((item, i) => {
-                                      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-                                      return (
-                                        <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${group.status === 'RETURN_ACCEPTED' ? 'text-red-900' : 'text-gray-900'}`}>
-                                          {group.status === 'RETURN_ACCEPTED' ? '-' : ''}{String(rawQty).padStart(2, '0')}
-                                        </li>
-                                      )
-                                    })}
-                                  </ul>
-                                </td>
-                                <td className="p-3 border-r border-gray-200 text-center">
-                                  <ul className="space-y-1">
-                                    {group.items.map((item, i) => {
-                                      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0;
-                                      // RED TEXT REMOVED FOR STANDARD DISPATCHES
-                                      return (
-                                        <li key={i} className={`h-7 flex items-center justify-center text-xs font-bold ${group.status === 'RETURN_ACCEPTED' ? 'text-red-600' : 'text-gray-900'}`}>
-                                          {getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))}
-                                        </li>
-                                      )
-                                    })}
-                                  </ul>
-                                </td>
-                                <td className="p-3 text-center">
-                                  {group.challan_no && isWithin30Days(group.date) ? (
-                                    <button onClick={() => {
-                                        const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
-                                        printPDF(group.challan_no, fullChallanItems);
-                                      }} 
-                                      className="mt-1 text-[10px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2.5 py-1 rounded-sm shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
-                                    >
-                                      PDF
-                                    </button>
-                                  ) : group.challan_no ? (
-                                    <span className="mt-1 inline-block text-[10px] text-gray-400 font-bold">LOCKED</span>
-                                  ) : (
-                                    <span className="mt-1 inline-block text-gray-300">-</span>
-                                  )}
-                                </td>
-                              </tr>
-                            )
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
           </div>
         )}
       </main>
