@@ -11,9 +11,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'], 
       manifest: {
-        name: 'GOD eChallan',
-        short_name: 'Gujarat Oil Depot Management System',
-        description: 'Gujarat Oil Depot Management System',
+        name: 'Gujarat Oil Depot ERP System',
+        short_name: 'GOD eChallan',
+        description: 'Gujarat Oil Depot ERP System',
         theme_color: '#0f172a',
         background_color: '#e5e7eb',
         display: 'standalone',
@@ -29,8 +29,8 @@ export default defineConfig({
             // 2. The padded dark PNG for Android/iOS mobile cropping
             src: '/pwa-512x512.png', 
             sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable' 
+            type: 'image/svg+xml',
+            purpose: 'maskable any' 
           }
         ]
       }

@@ -5,6 +5,50 @@ import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
+// --- NOTIFICATION HELPERS ---
+const playChime = () => {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime); 
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3); 
+    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.5);
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.5);
+  } catch (e) { console.warn("Audio API not supported"); }
+};
+
+let titleInterval;
+const blinkTitle = (msg) => {
+  clearInterval(titleInterval);
+  const originalTitle = "GOD eChallan";
+  let showMsg = true;
+  titleInterval = setInterval(() => {
+    document.title = showMsg ? msg : originalTitle;
+    showMsg = !showMsg;
+  }, 1000);
+  
+  // Stop blinking the exact moment the user looks at the tab again
+  window.addEventListener('focus', () => {
+    clearInterval(titleInterval);
+    document.title = originalTitle;
+  }, { once: true });
+};
+
+const triggerSystemAlert = (title, body) => {
+  playChime();
+  blinkTitle(`🔔 ${title}`);
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+  }
+};
+
 export default function App() {
   // --- AUTH & SYSTEM STATES ---
   const [session, setSession] = useState(null);
@@ -21,7 +65,7 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // --- PAGINATION STATES (FAST DYNAMIC YEARS) ---
+  // --- PAGINATION STATES ---
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
@@ -99,35 +143,19 @@ export default function App() {
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
-    if (data?.user) await fetchRole(data.user.id);
+    
+    if (data?.user) {
+      await fetchRole(data.user.id);
+      
+      // CRITICAL FIX: Request permissions ONLY upon manual user click (Login) to bypass browser blocks
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+    }
     setIsLoggingIn(false);
   }
 
-  // --- NOTIFICATION PERMISSION MANAGER ---
-  useEffect(() => {
-    // Ask for permission gracefully once the user has logged in
-    if (session && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
-    }
-  }, [session]);
-
-  const sendOSNotification = (title, body) => {
-    // If the device doesn't support notifications or permission was denied, fallback to standard alert
-    if (!("Notification" in window) || Notification.permission === "denied") {
-      alert(`${title}\n${body}`);
-      return;
-    }
-    // If granted, trigger the native OS push notification
-    if (Notification.permission === "granted") {
-      new Notification(title, {
-        body: body,
-        icon: '/pwa-512x512.png', // Uses your custom PWA logo for the notification badge
-        badge: '/pwa-512x512.png'
-      });
-    }
-  };
-
-  // --- HYPER-OPTIMIZED DATA FETCHING (PARALLEL PROMISES) ---
+  // --- HYPER-OPTIMIZED DATA FETCHING ---
   const fetchAvailableYears = async () => {
     const currentYear = new Date().getFullYear();
     const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
@@ -164,7 +192,6 @@ export default function App() {
     if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
-  // MONTH-WISE PAGINATION
   const fetchLedgerData = async () => {
     if (!isAdminAuth) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
@@ -187,39 +214,39 @@ export default function App() {
 
   useEffect(() => { refreshAllData(); }, [isAdminAuth, session, ledgerMonth, ledgerYear]);
 
-  // --- REALTIME NOTIFICATIONS SYSTEM ---
+  // --- REALTIME NOTIFICATIONS TRIGGER ---
   useEffect(() => {
     if (!session || !userRole) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
             if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
-                sendOSNotification("New Purchase Order", `Order ${payload.new.group_id} has been placed by Retail.`);
+                triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`);
                 refreshAllData();
             }
             if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
-                sendOSNotification("New Return Request", `Depot has requested a return for ${payload.new.group_id}.`);
+                triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`);
                 refreshAllData();
             }
           }
           if (payload.eventType === 'UPDATE') {
              if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') {
-                 sendOSNotification("Goods Dispatched", `Your order has been dispatched under Challan ${payload.new.challan_no}.`);
+                 triggerSystemAlert("Goods Dispatched", `Goods dispatched under Challan ${payload.new.challan_no}`);
                  refreshAllData();
              }
              if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') {
-                 sendOSNotification("Return Processed", `Retail has initiated Return: ${payload.new.challan_no}.`);
+                 triggerSystemAlert("Incoming Return", `Incoming Return: ${payload.new.challan_no}`);
                  refreshAllData();
              }
           }
           if (payload.eventType === 'DELETE' && userRole === 'retail') {
-              sendOSNotification("Order Item Cancelled", "An item in your pending order was cancelled due to stock unavailability.");
+              triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot.");
               refreshAllData();
           }
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole]);
 
-  // --- INLINE ADMIN NOTE SAVER ---
+  // --- SAVE ADMIN NOTE ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
@@ -229,7 +256,7 @@ export default function App() {
     } catch (error) { alert(`Failed to save note: ${error.message}`); }
   };
 
-  // --- FORMATTERS & HELPERS ---
+  // --- FORMATTERS ---
   const formatDate = (dateInput) => {
     const d = dateInput ? new Date(dateInput) : new Date();
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -563,8 +590,9 @@ export default function App() {
       challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
     }));
     const { error } = await supabase.from('transactions').insert(tx);
-    if (error) { alert(`Error: ${error.message}`); } else { 
-      alert(`${isReturn ? 'Return' : 'P.O.'} Submitted: ${groupId}`); setRetailCart([]); setRetailReturnNote(''); refreshAllData();
+    if (error) { triggerSystemAlert("Submission Error", error.message); } else { 
+      triggerSystemAlert(`${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`); 
+      setRetailCart([]); setRetailReturnNote(''); refreshAllData();
     }
   };
 
@@ -582,7 +610,7 @@ export default function App() {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
       const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); refreshAllData(); }
+      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); fetchPendingData(); }
     } else {
       const groupId = await getNextSequence('RR');
       const tx = depotCart.map(item => ({ 
@@ -590,7 +618,7 @@ export default function App() {
         unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
       }));
       const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { alert(`Return Request Submitted: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); refreshAllData(); }
+      if (!error) { triggerSystemAlert("Return Request Submitted", `Group ID: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); fetchPendingData(); }
     }
   };
 
@@ -779,8 +807,8 @@ export default function App() {
                   <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm">
                     <tr>
                       <th className="p-3 border-r border-gray-300 w-24 text-center">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300 w-48">CHALLAN NO</th>
-                      <th className="p-3 border-r border-gray-300">ITEM DESCRIPTION</th>
+                      <th className="p-3 border-r border-gray-300">CHALLAN NO</th>
+                      <th className="p-3 border-r border-gray-300 w-1/2">ITEM DESCRIPTION</th>
                       <th className="p-3 text-center border-r border-gray-300">NOS</th>
                       <th className="p-3 text-center border-r border-gray-300">QTY</th>
                       <th className="p-3 text-center border-r border-gray-300 w-48">ADMIN NOTE</th>
@@ -827,7 +855,7 @@ export default function App() {
                           {group.status !== 'RETURN_ACCEPTED' ? (
                             <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
                               {openNoteId === group.keyValue ? (
-                                <div className="flex flex-col gap-1 w-full">
+                                <div className="flex flex-col gap-1 w-full mt-1">
                                   <textarea
                                     className="w-full border-2 border-black p-1.5 text-[11px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words"
                                     rows="3"
@@ -836,7 +864,7 @@ export default function App() {
                                     placeholder="Enter note..."
                                     autoFocus
                                   />
-                                  <div className="flex gap-1 mt-1">
+                                  <div className="flex gap-1">
                                     <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
                                     <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                   </div>
@@ -845,11 +873,15 @@ export default function App() {
                                 <div className="flex flex-col items-start gap-1">
                                   <button 
                                     onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                    className={`text-[9px] px-2 py-1 border rounded transition-colors shadow-sm font-bold uppercase ${group.admin_note ? 'bg-blue-100 text-blue-800 border-blue-400 hover:bg-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}
+                                    className="text-[9px] px-2 py-1 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
                                   >
                                     {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                   </button>
-                                  {group.admin_note && <div className="text-[10px] text-gray-700 italic break-words max-w-[120px] mt-1 leading-tight">{group.admin_note}</div>}
+                                  {group.admin_note && (
+                                    <div className="text-[11px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1">
+                                      {group.admin_note}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -948,7 +980,7 @@ export default function App() {
                   {depotMode === 'RETURN_REQUEST' && (
                     <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-2 text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                     {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
                 </div>
@@ -1076,7 +1108,7 @@ export default function App() {
                   {retailMode === 'RETURN' && (
                     <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-2 text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
                     {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
