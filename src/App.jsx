@@ -136,7 +136,6 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      // Strictly ask for permission upon manual user action
       if ("Notification" in window && Notification.permission === "default") {
         Notification.requestPermission();
       }
@@ -648,39 +647,39 @@ export default function App() {
   };
 
   // --- UI RENDER ---
-  if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold">LOADING SYSTEM...</div>;
+  if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold select-none">LOADING SYSTEM...</div>;
   if (!session) return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans">
+    <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans select-none">
       <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full">
         <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2">GOD LOGIN</h2>
         <form onSubmit={handleLogin} className="space-y-4">
-          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none" required />
+          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text" required />
           <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
-          {loginError && <p className="text-red-600 font-bold text-center text-xs uppercase">{loginError}</p>}
+          {loginError && <p className="text-red-600 font-bold text-center text-sm uppercase">{loginError}</p>}
         </form>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200">
+    <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
             {userRole && userRole !== 'admin' && (
-              <span className="ml-2 bg-slate-900 text-blue-300 px-2 py-1 rounded text-[10px] font-bold border border-slate-600 shadow-sm uppercase">
+              <span className="ml-2 bg-white text-black px-2 py-1 rounded text-xs font-black border border-black shadow-sm uppercase">
                 {userRole === 'depot' ? 'OIL DEPOT' : userRole === 'retail' ? 'RETAIL STORE' : userRole}
               </span>
             )}
             {userRole === 'admin' && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
-                <button onClick={() => setView('depot')} className={`px-2 py-1 ${view === 'depot' ? 'bg-white text-black' : ''}`}>DEPOT</button>
-                <button onClick={() => setView('retail')} className={`px-2 py-1 ${view === 'retail' ? 'bg-white text-black' : ''}`}>RETAIL</button>
-                <button onClick={() => setView('admin')} className={`px-2 py-1 ${view === 'admin' ? 'bg-white text-black' : ''}`}>ADMIN</button>
+                <button onClick={() => setView('depot')} className={`px-3 py-1.5 text-xs ${view === 'depot' ? 'bg-white text-black' : ''}`}>DEPOT</button>
+                <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs ${view === 'retail' ? 'bg-white text-black' : ''}`}>RETAIL</button>
+                <button onClick={() => setView('admin')} className={`px-3 py-1.5 text-xs ${view === 'admin' ? 'bg-white text-black' : ''}`}>ADMIN</button>
               </div>
             )}
-            <button onClick={() => supabase.auth.signOut()} className="bg-red-600 px-3 py-1 border border-black hover:bg-red-700">LOGOUT</button>
+            <button onClick={() => supabase.auth.signOut()} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -689,11 +688,11 @@ export default function App() {
         {verifyModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-base font-bold border-b-2 border-black pb-3 mb-4 uppercase">VERIFY GOODS: {verifyModal.challanNo}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
+              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase">VERIFY GOODS: {verifyModal.challanNo}</h2>
+              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
                 {verifyModal.items.map((item, idx) => (
                   <label key={idx} className={`flex items-center space-x-3 p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-green-100 border-green-600' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                    <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-black" />
+                    <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-black select-text" />
                     <span className="flex-1 text-sm font-bold text-gray-800">{item.item_desc}</span>
                     <span className="text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                   </label>
@@ -710,20 +709,20 @@ export default function App() {
         {editPOModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
-                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-gray-100 border border-gray-300 p-2">
                     <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
+                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
+                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-sm font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
               </div>
             </div>
           </div>
@@ -732,14 +731,14 @@ export default function App() {
         {processReturnModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-base font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
-                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
+              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
+              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-red-50 border border-red-300 p-2">
                     <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
+                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
@@ -765,35 +764,35 @@ export default function App() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
               <div className="flex items-center gap-4">
                 <span className="font-black text-sm uppercase">{uploadStatus}</span>
-                <label className="bg-gray-200 border border-black hover:bg-gray-300 px-3 py-1 rounded-sm text-xs font-bold cursor-pointer">
+                <label className="bg-gray-200 border border-black hover:bg-gray-300 px-4 py-2 rounded-sm text-xs font-bold cursor-pointer">
                   UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
                 </label>
               </div>
               
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase mr-1">Ledger Month:</span>
-                <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1 text-xs font-bold uppercase focus:outline-none cursor-pointer">
+                <span className="text-sm font-bold uppercase mr-1">Ledger Month:</span>
+                <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
                   {monthNames.map((m, i) => <option key={i} value={i}>{m}</option>)}
                 </select>
-                <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1 text-xs font-bold uppercase focus:outline-none cursor-pointer">
+                <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
-                <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 py-1.5 font-bold text-xs ml-2">EXPORT EXCEL</button>
+                <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-5 py-2 font-bold text-xs ml-2">EXPORT EXCEL</button>
               </div>
             </div>
 
             <div className="bg-white border-2 border-black overflow-hidden shadow-sm">
               <div className="max-h-[65vh] overflow-y-auto">
-                <table className="w-full text-left border-collapse text-xs">
+                <table className="w-full text-left border-collapse text-sm">
                   <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm">
                     <tr>
-                      <th className="p-3 border-r border-gray-300 w-24 text-center">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300 w-48">CHALLAN NO</th>
-                      <th className="p-3 border-r border-gray-300 w-1/2">ITEM DESCRIPTION</th>
-                      <th className="p-3 text-center border-r border-gray-300">NOS</th>
-                      <th className="p-3 text-center border-r border-gray-300">QTY</th>
+                      <th className="p-3 border-r border-gray-300 w-28 text-center select-text">DATE / TIME</th>
+                      <th className="p-3 border-r border-gray-300 select-text">CHALLAN NO</th>
+                      <th className="p-3 border-r border-gray-300 w-1/2 select-text">ITEM DESCRIPTION</th>
+                      <th className="p-3 text-center border-r border-gray-300 select-text">NOS</th>
+                      <th className="p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
                       <th className="p-3 text-center border-r border-gray-300 w-48">ADMIN NOTE</th>
-                      <th className="p-3 text-center w-16">PDF</th>
+                      <th className="p-3 text-center w-20">PDF</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -803,7 +802,7 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
-                      <tr><td colSpan="7" className="p-6 text-center text-gray-500 font-bold uppercase">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
+                      <tr><td colSpan="7" className="p-8 text-center text-gray-500 font-bold uppercase text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
                       const key = row.challan_no || row.group_id; 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
@@ -811,55 +810,55 @@ export default function App() {
                       acc[key].items.push(row); return acc;
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'}`}>
-                        <td className="p-3 border-r border-gray-200 text-center font-bold leading-tight">
-                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal">{formatTime(group.timestamp)}</span>
+                        <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight select-text">
+                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-xs">{formatTime(group.timestamp)}</span>
                         </td>
-                        <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
+                        <td className="p-3 border-r border-gray-200 font-bold text-gray-900 select-text">
                           {group.challan_no || 'PENDING'}
                         </td>
-                        <td className="p-3 border-r border-gray-200">
-                          <ul className="space-y-1">
-                            {group.items.map((i, k) => <li key={k} className="font-bold border-b border-gray-100 last:border-0 py-1 uppercase truncate max-w-[300px] xl:max-w-[400px]" title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                        <td className="p-3 border-r border-gray-200 select-text">
+                          <ul className="space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className="font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[300px] xl:max-w-[400px]" title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
                           </ul>
                         </td>
-                        <td className="p-3 border-r border-gray-200 text-center">
-                          <ul className="space-y-1">
-                            {group.items.map((i, k) => <li key={k} className={`py-1 font-bold ${group.status==='RETURN_ACCEPTED'?'text-red-900':''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
+                        <td className="p-3 border-r border-gray-200 text-center select-text">
+                          <ul className="space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900':''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
                           </ul>
                         </td>
-                        <td className="p-3 border-r border-gray-200 text-center">
-                           <ul className="space-y-1">
-                            {group.items.map((i, k) => <li key={k} className={`py-1 font-bold ${group.status==='RETURN_ACCEPTED'?'text-red-600':''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                        <td className="p-3 border-r border-gray-200 text-center whitespace-nowrap select-text">
+                           <ul className="space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
                           </ul>
                         </td>
                         <td className="p-3 border-r border-gray-200 align-top">
                           {group.status !== 'RETURN_ACCEPTED' ? (
                             <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
                               {openNoteId === group.keyValue ? (
-                                <div className="flex flex-col gap-1 w-full mt-1">
+                                <div className="flex flex-col gap-1.5 w-full mt-1">
                                   <textarea
-                                    className="w-full border-2 border-black p-1.5 text-[11px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words"
+                                    className="w-full border-2 border-black p-2 text-xs font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
                                     rows="3"
                                     value={tempNoteText}
                                     onChange={(e) => setTempNoteText(e.target.value)}
                                     placeholder="Enter note..."
                                     autoFocus
                                   />
-                                  <div className="flex gap-1">
-                                    <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
-                                    <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
+                                  <div className="flex gap-1.5 mt-1">
+                                    <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1.5 text-[10px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
+                                    <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-[10px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                   </div>
                                 </div>
                               ) : (
                                 <div className="flex flex-col items-start gap-1">
                                   <button 
                                     onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                    className="text-[9px] px-2 py-1 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
+                                    className="text-[10px] px-2.5 py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
                                   >
                                     {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                   </button>
                                   {group.admin_note && (
-                                    <div className="text-[11px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1">
+                                    <div className="text-xs font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
                                       {group.admin_note}
                                     </div>
                                   )}
@@ -867,7 +866,7 @@ export default function App() {
                               )}
                             </div>
                           ) : (
-                            <div className="text-center text-gray-400 text-[10px]">-</div>
+                            <div className="text-center text-gray-400 text-sm">-</div>
                           )}
                         </td>
                         <td className="p-3 text-center vertical-middle">
@@ -876,12 +875,12 @@ export default function App() {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
-                              className="text-[10px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 py-1 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
+                              className="text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2.5 py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
                             >
                               PDF
                             </button>
                           ) : group.challan_no ? (
-                            <span className="text-[10px] text-gray-400 font-bold">LOCKED</span>
+                            <span className="text-[11px] text-gray-400 font-bold">LOCKED</span>
                           ) : (
                             <span className="text-gray-300">-</span>
                           )}
@@ -900,58 +899,58 @@ export default function App() {
             <div className="w-full md:w-1/2 flex flex-col gap-4 order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
-                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
+                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
+                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
                 </div>
               </div>
 
-              <form onSubmit={addToDepotCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3">
-                <div className="flex flex-col space-y-3">
+              <form onSubmit={addToDepotCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
+                <div className="flex flex-col space-y-4">
                   <div className="relative">
-                    <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
-                    <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
+                    <label className="block text-xs font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
+                    <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
                     {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
                         {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex gap-4">
                     <div className="flex-1">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
-                      <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
+                      <label className="block text-xs font-bold text-gray-700 mb-1.5">QTY</label>
+                      <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
-                    <div className="w-28">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
+                    <div className="w-32">
+                      <label className="block text-xs font-bold text-gray-700 mb-1.5">UNIT</label>
                       {selectedItem?.category === 'TVS' ? (
-                         <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
+                         <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
-                         <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
+                         <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-3 bg-gray-200 text-gray-500 text-sm font-bold select-text" />
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
                     + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
                   </button>
                 </div>
               </form>
               
               {depotCart.length > 0 && (
-                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
-                  <table className="w-full border-collapse mb-3 text-sm">
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-4 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
+                  <table className="w-full border-collapse mb-4 text-sm">
                     <tbody>
                       {depotCart.map((item, idx) => (
                         <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-50' : 'border-blue-200 hover:bg-blue-50'} last:border-0`}>
-                          <td className="py-2 flex items-center gap-2">
-                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                            <span className="font-bold text-gray-900 uppercase">{item.description}</span>
+                          <td className="py-2.5 flex items-center gap-3">
+                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2.5 py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase select-text">{item.description}</span>
                           </td>
-                          <td className="py-2 text-right w-40">
-                            <div className="flex items-center justify-end gap-1">
-                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
-                              <span className={`font-normal text-[10px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
+                          <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
+                            <div className="flex items-center justify-end gap-2">
+                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <span className={`font-normal text-xs ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -959,9 +958,9 @@ export default function App() {
                     </tbody>
                   </table>
                   {depotMode === 'RETURN_REQUEST' && (
-                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
+                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                     {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
                 </div>
@@ -970,27 +969,27 @@ export default function App() {
 
             <div className="w-full md:w-1/2 space-y-4 order-2">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-3 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
                   <span>Pending PO Inbox</span>
-                  <span className="bg-gray-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
+                  <span className="bg-gray-800 text-white px-3 py-1 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
                 </div>
-                <div className="p-3">
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-4">NO PENDING ORDERS</p> : (
-                    <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                <div className="p-4">
+                  {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
+                    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-3">
-                          <div className="font-bold text-xs mb-2 text-gray-600 border-b border-gray-200 pb-1">{groupId}</div>
-                          <table className="w-full mb-3 border-collapse text-sm">
+                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-4">
+                          <div className="font-bold text-sm mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
+                          <table className="w-full mb-4 border-collapse text-sm">
                             <tbody>
                               {items.map((item, idx) => (
                                 <tr key={idx} className="border-b border-gray-300 last:border-0">
-                                  <td className="py-2 pr-2 font-medium text-gray-800 uppercase">{item.item_desc}</td>
-                                  <td className="py-2 text-right font-bold w-32 whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</td>
+                                  <td className="py-2.5 pr-2 font-medium text-gray-800 uppercase select-text">{item.item_desc}</td>
+                                  <td className="py-2.5 text-right font-bold w-32 whitespace-nowrap select-text">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-xs py-2 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
+                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-sm py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
                         </div>
                       ))}
                     </div>
@@ -999,20 +998,20 @@ export default function App() {
               </div>
 
               <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
-                <div className="bg-red-100 border-b-2 border-red-400 px-4 py-2.5 font-bold text-sm uppercase text-red-800 flex justify-between items-center">
+                <div className="bg-red-100 border-b-2 border-red-400 px-4 py-3 font-bold text-sm uppercase text-red-800 flex justify-between items-center">
                   <span>Incoming Returns</span>
-                  <span className="bg-red-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
+                  <span className="bg-red-800 text-white px-3 py-1 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
                 </div>
-                <div className="p-3 max-h-64 overflow-y-auto">
-                  {Object.keys(pendingReturns).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-4">NO INCOMING RETURNS</p> : (
-                    <div className="space-y-3">
+                <div className="p-4 max-h-64 overflow-y-auto">
+                  {Object.keys(pendingReturns).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
+                    <div className="space-y-4">
                       {Object.entries(pendingReturns).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-3">
-                          <div className="flex justify-between items-center mb-3 border-b-2 border-red-200 pb-2">
-                            <span className="font-bold text-sm text-red-900">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
+                          <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
+                            <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-xs py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-sm py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
                       ))}
                     </div>
@@ -1028,58 +1027,58 @@ export default function App() {
             <div className="w-full md:w-1/2 flex flex-col gap-4 order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
-                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
+                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
+                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
                 </div>
               </div>
 
-              <form onSubmit={addToRetailCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3">
-                <div className="flex flex-col space-y-3">
+              <form onSubmit={addToRetailCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
+                <div className="flex flex-col space-y-4">
                   <div className="relative">
-                    <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
-                    <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
+                    <label className="block text-xs font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
+                    <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
                     {retailSearch.length > 0 && isRetailDropdownOpen && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
                         {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex gap-4">
                     <div className="flex-1">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
-                      <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
+                      <label className="block text-xs font-bold text-gray-700 mb-1.5">QTY</label>
+                      <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
-                    <div className="w-28">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
+                    <div className="w-32">
+                      <label className="block text-xs font-bold text-gray-700 mb-1.5">UNIT</label>
                       {retailSelectedItem?.category === 'TVS' ? (
-                         <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
+                         <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
-                         <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
+                         <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-3 bg-gray-200 text-gray-500 text-sm font-bold select-text" />
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
               </form>
 
               {retailCart.length > 0 && (
-                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-green-400'}`}>
-                  <table className="w-full border-collapse mb-3 text-sm">
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-4 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-green-400'}`}>
+                  <table className="w-full border-collapse mb-4 text-sm">
                     <tbody>
                       {retailCart.map((item, idx) => (
                         <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-green-200 hover:bg-green-50'} last:border-0`}>
-                          <td className="py-2 flex items-center gap-2">
-                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                            <span className="font-bold text-gray-900 uppercase">{item.description}</span>
+                          <td className="py-2.5 flex items-center gap-3">
+                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2.5 py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase select-text">{item.description}</span>
                           </td>
-                          <td className="py-2 text-right w-40">
-                             <div className="flex items-center justify-end gap-1">
-                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
-                              <span className={`font-normal text-[10px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
+                          <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
+                             <div className="flex items-center justify-end gap-2">
+                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <span className={`font-normal text-xs ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -1087,9 +1086,9 @@ export default function App() {
                     </tbody>
                   </table>
                   {retailMode === 'RETURN' && (
-                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
+                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
                     {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
@@ -1098,40 +1097,40 @@ export default function App() {
 
             <div className="w-full md:w-1/2 space-y-4 order-2">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800">Incoming Deliveries & Backorders</div>
-                <div className="p-3 flex-1 overflow-y-auto">
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-3 font-bold text-sm uppercase text-gray-800">Incoming Deliveries & Backorders</div>
+                <div className="p-4 flex-1 overflow-y-auto">
                   
-                  <div className="mb-4">
-                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">TO RECEIVE</h3>
-                    {Object.keys(incomingDeliveries).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO INCOMING GOODS</p> : (
+                  <div className="mb-5">
+                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1.5">TO RECEIVE</h3>
+                    {Object.keys(incomingDeliveries).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-4">NO INCOMING GOODS</p> : (
                       <div className="space-y-4">
                         {Object.entries(incomingDeliveries).map(([challanNo, items]) => (
-                          <div key={challanNo} className="border-2 border-gray-300 bg-gray-50 p-3">
-                            <div className="flex justify-between items-center mb-3 border-b-2 border-gray-200 pb-2">
-                              <span className="font-bold text-sm text-gray-900">{challanNo}</span>
-                              <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                          <div key={challanNo} className="border-2 border-gray-300 bg-gray-50 p-4">
+                            <div className="flex justify-between items-center mb-4 border-b-2 border-gray-200 pb-2">
+                              <span className="font-bold text-sm text-gray-900 select-text">{challanNo}</span>
+                              <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                             </div>
-                            <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-green-700 hover:bg-green-800 text-white font-bold text-xs py-2.5 border-2 border-green-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
+                            <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-green-700 hover:bg-green-800 text-white font-bold text-sm py-2.5 border-2 border-green-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
                           </div>
                         ))}
                       </div>
                     )}
                   </div>
 
-                  <div className="mb-4">
-                    <h3 className="text-xs font-bold text-red-500 mb-2 border-b border-gray-300 pb-1">DEPOT RETURN REQUESTS</h3>
-                    {Object.keys(pendingDepotReturns).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING REQUESTS</p> : (
-                      <div className="space-y-3">
+                  <div className="mb-5">
+                    <h3 className="text-xs font-bold text-red-500 mb-2 border-b border-gray-300 pb-1.5">DEPOT RETURN REQUESTS</h3>
+                    {Object.keys(pendingDepotReturns).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-4">NO PENDING REQUESTS</p> : (
+                      <div className="space-y-4">
                         {Object.entries(pendingDepotReturns).map(([groupId, items]) => (
-                          <div key={groupId} className="border border-red-300 bg-red-50 p-2">
-                            <div className="font-bold text-[10px] text-red-800 mb-1">{groupId}</div>
+                          <div key={groupId} className="border border-red-300 bg-red-50 p-3">
+                            <div className="font-bold text-[11px] text-red-800 mb-2">{groupId}</div>
                             {items.map((item, idx) => (
-                              <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                                <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
-                                <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                              <div key={idx} className="flex justify-between text-sm text-gray-800 pb-1.5">
+                                <span className="truncate pr-2 font-bold uppercase select-text">{item.item_desc}</span>
+                                <span className="font-bold whitespace-nowrap select-text">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                               </div>
                             ))}
-                            <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full mt-2 bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] py-2 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS REQUEST</button>
+                            <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full mt-3 bg-red-700 hover:bg-red-800 text-white font-bold text-xs py-2 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS REQUEST</button>
                           </div>
                         ))}
                       </div>
@@ -1139,16 +1138,16 @@ export default function App() {
                   </div>
 
                   <div>
-                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">BACKORDERS / PROCESSING</h3>
-                    {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING POs</p> : (
-                      <div className="space-y-3 max-h-[40vh] overflow-y-auto">
+                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1.5">BACKORDERS / PROCESSING</h3>
+                    {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-4">NO PENDING POs</p> : (
+                      <div className="space-y-4 max-h-[40vh] overflow-y-auto">
                         {Object.entries(pendingPOs).map(([groupId, items]) => (
-                          <div key={groupId} className="border border-orange-300 bg-orange-50 p-2">
-                            <div className="font-bold text-[10px] text-orange-800 mb-1">{groupId}</div>
+                          <div key={groupId} className="border border-orange-300 bg-orange-50 p-3">
+                            <div className="font-bold text-[11px] text-orange-800 mb-2">{groupId}</div>
                             {items.map((item, idx) => (
-                              <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                                <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
-                                <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                              <div key={idx} className="flex justify-between text-sm text-gray-800 pb-1.5">
+                                <span className="truncate pr-2 font-bold uppercase select-text">{item.item_desc}</span>
+                                <span className="font-bold whitespace-nowrap select-text">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                               </div>
                             ))}
                           </div>
