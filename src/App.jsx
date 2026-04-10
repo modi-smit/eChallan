@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable react/no-unescaped-entities */
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
@@ -19,12 +21,12 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // --- PAGINATION STATES (DYNAMIC) ---
+  // --- PAGINATION STATES (FAST DYNAMIC YEARS) ---
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
   
-  // --- COLLAPSIBLE ADMIN NOTE STATE ---
+  // --- INLINE ADMIN NOTE STATE ---
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
 
@@ -101,23 +103,20 @@ export default function App() {
     setIsLoggingIn(false);
   }
 
-  // --- FAST DYNAMIC YEAR CALCULATION ---
+  // --- HYPER-OPTIMIZED DATA FETCHING (PARALLEL PROMISES) ---
   const fetchAvailableYears = async () => {
     const currentYear = new Date().getFullYear();
-    // Ask DB for ONLY the very first transaction ever placed (Takes 1 millisecond)
     const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
-    
     if (data && data.length > 0) {
       const firstYear = new Date(data[0].timestamp).getFullYear();
       const years = [];
       for (let i = firstYear; i <= currentYear; i++) years.push(i);
-      setAvailableYears(years.reverse()); // Put newest year at the top
+      setAvailableYears(years.reverse());
     } else {
       setAvailableYears([currentYear]);
     }
   };
 
-  // --- HYPER-OPTIMIZED DATA FETCHING (WITH PAGINATION) ---
   const fetchMasterItems = async () => {
     const { data } = await supabase.from('master_items').select('*');
     if (data && data.length > 0) {
@@ -141,6 +140,7 @@ export default function App() {
     if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
+  // MONTH-WISE PAGINATION
   const fetchLedgerData = async () => {
     if (!isAdminAuth) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
@@ -169,28 +169,28 @@ export default function App() {
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
             if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
-                alert(`New Alert: Order ${payload.new.group_id} has been received.`); refreshAllData();
+                alert(`🔔 NEW ALERT: Order ${payload.new.group_id} has been received.`); refreshAllData();
             }
             if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
-                alert(`New Alert: Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
+                alert(`🔔 NEW ALERT: Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
             }
           }
           if (payload.eventType === 'UPDATE') {
              if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') {
-                 alert(`Alert: Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData();
+                 alert(`🚚 ALERT: Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData();
              }
              if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') {
-                 alert(`Alert: Incoming Return: ${payload.new.challan_no}`); refreshAllData();
+                 alert(`📦 ALERT: Incoming Return: ${payload.new.challan_no}`); refreshAllData();
              }
           }
           if (payload.eventType === 'DELETE' && userRole === 'retail') {
-              alert(`Alert: A pending order item has been cancelled by the Depot.`); refreshAllData();
+              alert(`⚠️ ALERT: A pending order item has been cancelled by the Depot.`); refreshAllData();
           }
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole]);
 
-  // --- SAVE ADMIN NOTE ---
+  // --- INLINE ADMIN NOTE SAVER ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
@@ -336,7 +336,6 @@ export default function App() {
     const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
     const servoEntries = summaryEntries.filter(([_, data]) => data.category === 'SERVO');
     const tvsEntries = summaryEntries.filter(([_, data]) => data.category === 'TVS');
-    
     const exportTitle = `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${monthNames[ledgerMonth]} ${ledgerYear})`;
 
     let leftRowsFlat = [];
@@ -385,7 +384,6 @@ export default function App() {
     rightRowsFlat.push({ type: 'title', title: `ITEM WISE SUMMARY` });
     rightRowsFlat.push({ type: 'subtitle', title: `TOTAL SKUS: ${summaryEntries.length}` });
     rightRowsFlat.push({ type: 'header', cols: ['ITEM DESCRIPTION', 'TOTAL NOS', 'CONVERTED QTY'] });
-    
     if (servoEntries.length > 0) {
         rightRowsFlat.push({ type: 'group_title', title: 'SERVO LUBRICANTS' });
         servoEntries.forEach(([desc, data]) => { rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() }); });
@@ -530,7 +528,7 @@ export default function App() {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
       const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); fetchPendingData(); }
+      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); refreshAllData(); }
     } else {
       const groupId = await getNextSequence('RR');
       const tx = depotCart.map(item => ({ 
@@ -538,7 +536,7 @@ export default function App() {
         unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
       }));
       const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { alert(`Return Request Submitted: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); fetchPendingData(); }
+      if (!error) { alert(`Return Request Submitted: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); refreshAllData(); }
     }
   };
 
@@ -596,9 +594,9 @@ export default function App() {
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
             {userRole && userRole !== 'admin' && (
-              <div className="bg-yellow-400 text-black px-3 py-1 rounded font-black text-[11px] uppercase shadow-sm border border-yellow-600 mr-2">
-                LOGGED IN: {userRole === 'depot' ? 'DEPOT' : userRole === 'retail' ? 'RETAIL' : userRole}
-              </div>
+              <span className="ml-2 bg-white text-black px-2 py-1 rounded text-[10px] font-black border border-black shadow-sm uppercase">
+                {userRole === 'depot' ? 'OIL DEPOT' : userRole === 'retail' ? 'RETAIL STORE' : userRole}
+              </span>
             )}
             {userRole === 'admin' && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
@@ -637,7 +635,7 @@ export default function App() {
         {editPOModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW &amp; DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
                 <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
@@ -714,10 +712,12 @@ export default function App() {
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm">
                     <tr>
-                      <th className="p-3 border-r border-gray-300 w-32 text-center">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300 w-48">CHALLAN & NOTES</th>
-                      <th className="p-3 border-r border-gray-300">DESCRIPTION</th>
-                      <th className="p-3 text-center">NOS / QTY</th>
+                      <th className="p-3 border-r border-gray-300 w-24 text-center">DATE / TIME</th>
+                      <th className="p-3 border-r border-gray-300">CHALLAN NO</th>
+                      <th className="p-3 border-r border-gray-300 w-1/2">ITEM DESCRIPTION</th>
+                      <th className="p-3 text-center border-r border-gray-300">NOS</th>
+                      <th className="p-3 text-center border-r border-gray-300">QTY</th>
+                      <th className="p-3 text-center border-r border-gray-300 w-48">ADMIN NOTE</th>
                       <th className="p-3 text-center w-16">PDF</th>
                     </tr>
                   </thead>
@@ -728,60 +728,72 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
-                      <tr><td colSpan="5" className="p-6 text-center text-gray-500 font-bold uppercase">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
+                      <tr><td colSpan="7" className="p-6 text-center text-gray-500 font-bold uppercase">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
                       const key = row.challan_no || row.group_id; 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
-                    }, {})).map((group, idx) => (
+                    }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'}`}>
-                        <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
+                        <td className="p-3 border-r border-gray-200 text-center font-bold leading-tight">
                           {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal">{formatTime(group.timestamp)}</span>
                         </td>
-                        <td className="p-3 border-r border-gray-300">
-                          <div className="font-black mb-2 text-[13px]">{group.challan_no || 'PENDING'}</div>
-                          
-                          {group.status !== 'RETURN_ACCEPTED' && (
-                            <div className="relative mt-2">
+                        <td className="p-3 border-r border-gray-200 font-bold text-gray-900 text-xs">
+                          {group.challan_no || 'PENDING'}
+                        </td>
+                        <td className="p-3 border-r border-gray-200">
+                          <ul className="space-y-1">
+                            {group.items.map((i, k) => <li key={k} className="font-bold border-b border-gray-100 last:border-0 py-1 uppercase truncate max-w-[300px] xl:max-w-[400px]" title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                          </ul>
+                        </td>
+                        <td className="p-3 border-r border-gray-200 text-center">
+                          <ul className="space-y-1">
+                            {group.items.map((i, k) => <li key={k} className={`py-1 font-bold ${group.status==='RETURN_ACCEPTED'?'text-red-900':''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
+                          </ul>
+                        </td>
+                        <td className="p-3 border-r border-gray-200 text-center">
+                           <ul className="space-y-1">
+                            {group.items.map((i, k) => <li key={k} className={`py-1 font-bold ${group.status==='RETURN_ACCEPTED'?'text-red-600':''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                          </ul>
+                        </td>
+                        <td className="p-3 border-r border-gray-200 align-top">
+                          {group.status !== 'RETURN_ACCEPTED' ? (
+                            <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
                               {openNoteId === group.keyValue ? (
-                                <div className="absolute left-0 top-0 bg-white border border-gray-400 p-2 shadow-xl z-20 w-48 rounded">
+                                <div className="flex flex-col gap-1 w-full mt-1">
                                   <textarea
-                                    className="w-full border border-gray-300 p-1.5 text-[11px] font-bold focus:outline-none focus:border-black resize-none"
+                                    className="w-full border-2 border-black p-1.5 text-[11px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words"
                                     rows="3"
                                     value={tempNoteText}
                                     onChange={(e) => setTempNoteText(e.target.value)}
                                     placeholder="Enter note..."
                                     autoFocus
                                   />
-                                  <div className="flex gap-2 mt-2">
-                                    <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-black text-white px-2 py-1.5 text-[9px] font-bold uppercase flex-1 border border-black hover:bg-gray-800">SAVE</button>
-                                    <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-[9px] font-bold uppercase flex-1 border border-gray-400 hover:bg-gray-300">CANCEL</button>
+                                  <div className="flex gap-1">
+                                    <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
+                                    <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1 text-[10px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                   </div>
                                 </div>
                               ) : (
                                 <div className="flex flex-col items-start gap-1">
                                   <button 
                                     onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                    className={`text-[9px] px-2 py-1 border rounded transition-colors shadow-sm font-bold uppercase ${group.admin_note ? 'bg-blue-100 text-blue-800 border-blue-400 hover:bg-blue-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}
+                                    className="text-[9px] px-2 py-1 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
                                   >
                                     {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                   </button>
-                                  {group.admin_note && <div className="text-[10px] text-gray-700 italic break-words max-w-full leading-tight pr-2">{group.admin_note}</div>}
+                                  {group.admin_note && (
+                                    <div className="text-[11px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1">
+                                      {group.admin_note}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
+                          ) : (
+                            <div className="text-center text-gray-400 text-[10px]">-</div>
                           )}
-                        </td>
-                        <td className="p-3 border-r border-gray-300">
-                          {group.items.map((i, k) => <div key={k} className="font-bold border-b border-gray-200 last:border-0 py-1 uppercase">{i.item_desc}</div>)}
-                        </td>
-                        <td className="p-3 border-r border-gray-300 text-center">
-                          {group.items.map((i, k) => (
-                            <div key={k} className={`py-1 font-black border-b border-gray-200 last:border-0 ${group.status === 'RETURN_ACCEPTED' ? 'text-red-700' : 'text-black'}`}>
-                              {group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty} <span className="text-[9px] font-bold text-gray-500 ml-1">{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</span>
-                            </div>
-                          ))}
                         </td>
                         <td className="p-3 text-center vertical-middle">
                           {group.challan_no && isWithin30Days(group.timestamp) ? (
@@ -789,12 +801,12 @@ export default function App() {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
-                              className="text-[9px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 py-1 rounded shadow-sm"
+                              className="text-[10px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 py-1 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
                             >
                               PDF
                             </button>
                           ) : group.challan_no ? (
-                            <span className="text-[9px] text-gray-400 font-bold">LOCKED</span>
+                            <span className="text-[10px] text-gray-400 font-bold">LOCKED</span>
                           ) : (
                             <span className="text-gray-300">-</span>
                           )}
@@ -809,8 +821,79 @@ export default function App() {
         )}
 
         {view === 'depot' && (
-          <div className="flex flex-col-reverse md:grid md:grid-cols-2 gap-4 items-start">
-            <div className="w-full space-y-4">
+          <div className="flex flex-col md:flex-row gap-4 items-start">
+            <div className="w-full md:w-1/2 flex flex-col gap-4 order-1">
+              <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
+                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
+                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
+                </div>
+              </div>
+
+              <form onSubmit={addToDepotCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3">
+                <div className="flex flex-col space-y-3">
+                  <div className="relative">
+                    <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
+                    <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
+                    {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
+                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
+                        {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
+                      <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
+                    </div>
+                    <div className="w-28">
+                      <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
+                      {selectedItem?.category === 'TVS' ? (
+                         <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
+                            <option value="PCS">PCS</option><option value="SET">SET</option>
+                         </select>
+                      ) : (
+                         <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
+                      )}
+                    </div>
+                  </div>
+                  <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                    + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
+                  </button>
+                </div>
+              </form>
+              
+              {depotCart.length > 0 && (
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
+                  <table className="w-full border-collapse mb-3 text-sm">
+                    <tbody>
+                      {depotCart.map((item, idx) => (
+                        <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-50' : 'border-blue-200 hover:bg-blue-50'} last:border-0`}>
+                          <td className="py-2 flex items-center gap-2">
+                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase">{item.description}</span>
+                          </td>
+                          <td className="py-2 text-right w-40">
+                            <div className="flex items-center justify-end gap-1">
+                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
+                              <span className={`font-normal text-[10px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {depotMode === 'RETURN_REQUEST' && (
+                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
+                  )}
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                    {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="w-full md:w-1/2 space-y-4 order-2">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
                   <span>Pending PO Inbox</span>
@@ -862,210 +945,143 @@ export default function App() {
                 </div>
               </div>
             </div>
-
-            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col sticky top-[60px]">
-              <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
-                <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
-              </div>
-              <div className="p-3 flex-1 flex flex-col min-h-[60vh]">
-                {depotCart.length > 0 && (
-                  <div className={`${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-300' : 'bg-blue-50 border-blue-300'} border-2 p-3 mb-4`}>
-                    <table className="w-full border-collapse mb-3 text-sm">
-                      <tbody>
-                        {depotCart.map((item, idx) => (
-                          <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-100' : 'border-blue-200 hover:bg-blue-100'} last:border-0`}>
-                            <td className="py-2 flex items-center gap-2">
-                              <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                              <span className="font-bold text-gray-900 uppercase">{item.description}</span>
-                            </td>
-                            <td className="py-2 text-right w-40">
-                              <div className="flex items-center justify-end gap-1">
-                                <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
-                                <span className={`font-normal text-[10px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {depotMode === 'RETURN_REQUEST' && (
-                      <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
-                    )}
-                    <button onClick={submitDepotAction} className={`w-full text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
-                      {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
-                    </button>
-                  </div>
-                )}
-                
-                <form onSubmit={addToDepotCart} className="mt-auto bg-gray-100 border-2 border-gray-300 p-3">
-                  <div className="flex flex-col space-y-3">
-                    <div className="relative">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
-                      <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
-                      {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
-                        <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                          {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex gap-3">
-                      <div className="flex-1">
-                        <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
-                        <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
-                      </div>
-                      <div className="w-28">
-                        <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
-                        {selectedItem?.category === 'TVS' ? (
-                           <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
-                              <option value="PCS">PCS</option><option value="SET">SET</option>
-                           </select>
-                        ) : (
-                           <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
-                        )}
-                      </div>
-                    </div>
-                    <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
-                      + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
           </div>
         )}
 
         {view === 'retail' && (
-          <div className="flex flex-col-reverse md:grid md:grid-cols-2 gap-4 items-start">
-            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-              <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800">Incoming Deliveries & Backorders</div>
-              <div className="p-3 flex-1 overflow-y-auto">
-                
-                <div className="mb-4">
-                  <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">TO RECEIVE</h3>
-                  {Object.keys(incomingDeliveries).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO INCOMING GOODS</p> : (
-                    <div className="space-y-4">
-                      {Object.entries(incomingDeliveries).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-gray-300 bg-gray-50 p-3">
-                          <div className="flex justify-between items-center mb-3 border-b-2 border-gray-200 pb-2">
-                            <span className="font-bold text-sm text-gray-900">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
-                          </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-green-700 hover:bg-green-800 text-white font-bold text-xs py-2.5 border-2 border-green-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="mb-4">
-                  <h3 className="text-xs font-bold text-red-500 mb-2 border-b border-gray-300 pb-1">DEPOT RETURN REQUESTS</h3>
-                  {Object.keys(pendingDepotReturns).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING REQUESTS</p> : (
-                    <div className="space-y-3">
-                      {Object.entries(pendingDepotReturns).map(([groupId, items]) => (
-                        <div key={groupId} className="border border-red-300 bg-red-50 p-2">
-                          <div className="font-bold text-[10px] text-red-800 mb-1">{groupId}</div>
-                          {items.map((item, idx) => (
-                            <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                              <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
-                              <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
-                            </div>
-                          ))}
-                          <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full mt-2 bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] py-2 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS REQUEST</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">BACKORDERS / PROCESSING</h3>
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING POs</p> : (
-                    <div className="space-y-3 max-h-[40vh] overflow-y-auto">
-                      {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border border-orange-300 bg-orange-50 p-2">
-                          <div className="font-bold text-[10px] text-orange-800 mb-1">{groupId}</div>
-                          {items.map((item, idx) => (
-                            <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
-                              <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
-                              <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+          <div className="flex flex-col md:flex-row gap-4 items-start">
+            <div className="w-full md:w-1/2 flex flex-col gap-4 order-1">
+              <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
+                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
+                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
                 </div>
               </div>
-            </div>
 
-            <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col sticky top-[60px]">
-              <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
-                <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
-              </div>
-              <div className="p-3 flex-1 flex flex-col min-h-[60vh]">
-                {retailCart.length > 0 && (
-                  <div className={`${retailMode === 'RETURN' ? 'bg-red-50 border-red-300' : 'bg-green-50 border-green-300'} border-2 p-3 mb-4`}>
-                    <table className="w-full border-collapse mb-3 text-sm">
-                      <tbody>
-                        {retailCart.map((item, idx) => (
-                          <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-100' : 'border-green-200 hover:bg-green-100'} last:border-0`}>
-                            <td className="py-2 flex items-center gap-2">
-                              <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
-                              <span className="font-bold text-gray-900 uppercase">{item.description}</span>
-                            </td>
-                            <td className="py-2 text-right w-40">
-                               <div className="flex items-center justify-end gap-1">
-                                <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
-                                <span className={`font-normal text-[10px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {retailMode === 'RETURN' && (
-                      <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
+              <form onSubmit={addToRetailCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3">
+                <div className="flex flex-col space-y-3">
+                  <div className="relative">
+                    <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
+                    <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
+                    {retailSearch.length > 0 && isRetailDropdownOpen && (
+                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
+                        {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
+                      </div>
                     )}
-                    <button onClick={submitRetailAction} className={`w-full text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
-                      {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
-                    </button>
                   </div>
-                )}
-                
-                <form onSubmit={addToRetailCart} className="mt-auto bg-gray-100 border-2 border-gray-300 p-3">
-                  <div className="flex flex-col space-y-3">
-                    <div className="relative">
-                      <label className="block text-xs font-bold text-gray-700 mb-1">SEARCH ITEM</label>
-                      <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="TYPE TO SEARCH..." />
-                      {retailSearch.length > 0 && isRetailDropdownOpen && (
-                        <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                          {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
-                        </div>
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
+                      <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
+                    </div>
+                    <div className="w-28">
+                      <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
+                      {retailSelectedItem?.category === 'TVS' ? (
+                         <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
+                            <option value="PCS">PCS</option><option value="SET">SET</option>
+                         </select>
+                      ) : (
+                         <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
                       )}
                     </div>
-                    <div className="flex gap-3">
-                      <div className="flex-1">
-                        <label className="block text-xs font-bold text-gray-700 mb-1">QTY</label>
-                        <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50" placeholder="0" />
-                      </div>
-                      <div className="w-28">
-                        <label className="block text-xs font-bold text-gray-700 mb-1">UNIT</label>
-                        {retailSelectedItem?.category === 'TVS' ? (
-                           <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-2.5 bg-white text-sm font-bold focus:outline-none cursor-pointer">
-                              <option value="PCS">PCS</option><option value="SET">SET</option>
-                           </select>
-                        ) : (
-                           <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-2.5 bg-gray-200 text-gray-500 text-sm font-bold" />
-                        )}
-                      </div>
-                    </div>
-                    <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
-                      + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
-                    </button>
                   </div>
-                </form>
+                  <button type="submit" className={`w-full text-white font-bold text-xs py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                    + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
+                  </button>
+                </div>
+              </form>
+
+              {retailCart.length > 0 && (
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-green-400'}`}>
+                  <table className="w-full border-collapse mb-3 text-sm">
+                    <tbody>
+                      {retailCart.map((item, idx) => (
+                        <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-green-200 hover:bg-green-50'} last:border-0`}>
+                          <td className="py-2 flex items-center gap-2">
+                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase">{item.description}</span>
+                          </td>
+                          <td className="py-2 text-right w-40">
+                             <div className="flex items-center justify-end gap-1">
+                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1 text-center font-bold focus:outline-none focus:bg-yellow-50`} />
+                              <span className={`font-normal text-[10px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'} whitespace-nowrap`}>{item.unit || getUnit(item.description)}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {retailMode === 'RETURN' && (
+                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3" />
+                  )}
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-sm py-2.5 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
+                    {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="w-full md:w-1/2 space-y-4 order-2">
+              <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800">Incoming Deliveries & Backorders</div>
+                <div className="p-3 flex-1 overflow-y-auto">
+                  
+                  <div className="mb-4">
+                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">TO RECEIVE</h3>
+                    {Object.keys(incomingDeliveries).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO INCOMING GOODS</p> : (
+                      <div className="space-y-4">
+                        {Object.entries(incomingDeliveries).map(([challanNo, items]) => (
+                          <div key={challanNo} className="border-2 border-gray-300 bg-gray-50 p-3">
+                            <div className="flex justify-between items-center mb-3 border-b-2 border-gray-200 pb-2">
+                              <span className="font-bold text-sm text-gray-900">{challanNo}</span>
+                              <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                            </div>
+                            <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-green-700 hover:bg-green-800 text-white font-bold text-xs py-2.5 border-2 border-green-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mb-4">
+                    <h3 className="text-xs font-bold text-red-500 mb-2 border-b border-gray-300 pb-1">DEPOT RETURN REQUESTS</h3>
+                    {Object.keys(pendingDepotReturns).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING REQUESTS</p> : (
+                      <div className="space-y-3">
+                        {Object.entries(pendingDepotReturns).map(([groupId, items]) => (
+                          <div key={groupId} className="border border-red-300 bg-red-50 p-2">
+                            <div className="font-bold text-[10px] text-red-800 mb-1">{groupId}</div>
+                            {items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
+                                <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
+                                <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                              </div>
+                            ))}
+                            <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full mt-2 bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] py-2 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS REQUEST</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 className="text-xs font-bold text-gray-500 mb-2 border-b border-gray-300 pb-1">BACKORDERS / PROCESSING</h3>
+                    {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-400 font-bold text-center py-2">NO PENDING POs</p> : (
+                      <div className="space-y-3 max-h-[40vh] overflow-y-auto">
+                        {Object.entries(pendingPOs).map(([groupId, items]) => (
+                          <div key={groupId} className="border border-orange-300 bg-orange-50 p-2">
+                            <div className="font-bold text-[10px] text-orange-800 mb-1">{groupId}</div>
+                            {items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-xs text-gray-800 pb-1">
+                                <span className="truncate pr-2 font-bold uppercase">{item.item_desc}</span>
+                                <span className="font-bold whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
