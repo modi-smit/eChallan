@@ -299,17 +299,17 @@ serve(async (req: any) => {
         "Authorization": `Bearer ${resendApiKey}`,
       },
       body: JSON.stringify({
-        from: "Gujarat Oil Depot <onboarding@resend.dev>", 
+        from: "Gujarat Oil Depot Management System<onboarding@resend.dev>", 
         to: ["smit.modi206@gmail.com"],
-        subject: `GOD Ledger Report: ${cycleTitle}`,
+        subject: `GOD eChallan Ledger Report: ${cycleTitle}`,
         html: `
           <div style=\"font-family: Arial, sans-serif; color: #333; padding: 20px;\">
-            <h2 style=\"color: #1e3a8a;\">Gujarat Oil Depot - Automated Ledger</h2>
-            <p>Attached is the ${isManualTest ? '<b>Manual Month-To-Date</b>' : 'automated'} transaction and return ledger for: <b>${cycleTitle}</b>.</p>
+            <h2 style=\"color: #1e3a8a;\">Gujarat Oil Depot - Automated Monthly Ledger</h2>
+            <p>Attached is the ${isManualTest ? '<b>Monthly eChallan</b>' : 'automated'} transaction and return ledger for: <b>${cycleTitle}</b>.</p>
             <p><b>Total Operations Logged:</b> ${ledgerData?.length || 0}</p>
             <br/>
             <hr style=\"border: 1px solid #ccc;\" />
-            <p style=\"font-size: 11px; color: #666; margin-top: 10px;\">This is an automatically generated email from your ERP System.</p>
+            <p style=\"font-size: 11px; color: #666; margin-top: 10px;\">This is an automatically generated email from your GOD eChallan System.</p>
           </div>
         `,
         attachments: [
