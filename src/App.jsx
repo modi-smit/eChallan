@@ -121,7 +121,6 @@ export default function App() {
       const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
       setUserRole(currentRole === 'master' ? 'admin' : currentRole);
       
-      // Fetch years for ALL roles so Ledger Dropdowns work for everyone
       fetchAvailableYears();
 
       if (currentRole === 'admin' || currentRole === 'master') { setView('ledger'); setIsAdminAuth(true); } 
@@ -204,6 +203,34 @@ export default function App() {
   };
 
   useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear]);
+
+  // --- PERSISTENT BADGE & TITLE HIGHLIGHTING ---
+  useEffect(() => {
+    let actionableCount = 0;
+    if (userRole === 'depot') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length;
+    else if (userRole === 'retail') actionableCount = Object.keys(incomingDeliveries).length;
+    else if (userRole === 'admin') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
+
+    if (navigator.setAppBadge) {
+      if (actionableCount > 0) navigator.setAppBadge(actionableCount).catch(() => {});
+      else navigator.clearAppBadge().catch(() => {});
+    }
+
+    let persistentInterval;
+    if (actionableCount > 0) {
+      persistentInterval = setInterval(() => {
+        if (!document.title.includes("🔔")) {
+           document.title = document.title === "GOD eChallan" ? `(${actionableCount}) Action Required` : "GOD eChallan";
+        }
+      }, 1500);
+    } else {
+      if (!document.title.includes("🔔")) document.title = "GOD eChallan";
+    }
+
+    return () => {
+      if (persistentInterval) clearInterval(persistentInterval);
+    };
+  }, [pendingPOs, pendingDepotReturns, incomingDeliveries, pendingReturns, userRole]);
 
   // --- REALTIME NOTIFICATIONS ---
   useEffect(() => {
@@ -668,14 +695,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[13px]">
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
-            {userRole && userRole !== 'admin' && (
-              <span className="ml-2 bg-white text-black px-2 py-1 rounded text-xs font-black border border-black shadow-sm uppercase">
-                {userRole === 'depot' ? 'OIL DEPOT' : userRole === 'retail' ? 'RETAIL STORE' : userRole}
-              </span>
-            )}
             {userRole && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
                 {(userRole === 'admin' || userRole === 'depot') && (
@@ -701,14 +723,14 @@ export default function App() {
                 {verifyModal.items.map((item, idx) => (
                   <label key={idx} className={`flex items-center space-x-3 p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-green-100 border-green-600' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
                     <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-black select-text" />
-                    <span className="flex-1 text-sm font-bold text-gray-800">{item.item_desc}</span>
-                    <span className="text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                    <span className="flex-1 text-[13px] font-bold text-gray-800">{item.item_desc}</span>
+                    <span className="text-[13px] font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                   </label>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-green-700 text-white py-3 text-sm font-bold hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
+                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-green-700 text-white py-3 text-[13px] font-bold hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
               </div>
             </div>
           </div>
@@ -717,20 +739,20 @@ export default function App() {
         {editPOModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-[15px]">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <span className="flex-1 text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-sm font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
+                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-[13px] font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
               </div>
             </div>
           </div>
@@ -739,20 +761,20 @@ export default function App() {
         {processReturnModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
+              <h2 className="text-[15px] font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <span className="flex-1 text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-sm font-bold hover:bg-red-900">GENERATE RETURN</button>
+                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-[13px] font-bold hover:bg-red-900">GENERATE RETURN</button>
               </div>
             </div>
           </div>
@@ -762,7 +784,7 @@ export default function App() {
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
               <h2 className="text-xl font-black text-red-800 mb-2">NO TERMINAL ASSIGNED</h2>
-              <p className="font-bold text-gray-800 text-sm">Your account does not have a valid role (Depot, Retail, or Admin) assigned in the database.</p>
+              <p className="font-bold text-gray-800 text-[13px]">Your account does not have a valid role (Depot, Retail, or Admin) assigned in the database.</p>
             </div>
           </div>
         )}
@@ -771,16 +793,16 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
               <div className="flex items-center gap-4">
-                <span className="font-black text-sm uppercase">{uploadStatus}</span>
+                <span className="font-black text-[13px] uppercase">{uploadStatus}</span>
                 {userRole === 'admin' && (
-                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-4 py-2 rounded-sm text-sm font-bold cursor-pointer">
+                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-4 py-2 rounded-sm text-[13px] font-bold cursor-pointer">
                     UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
                   </label>
                 )}
               </div>
               
               <div className="flex items-center gap-2">
-                <span className="text-sm font-bold uppercase mr-1">Ledger Month:</span>
+                <span className="text-[13px] font-bold uppercase mr-1">Ledger Month:</span>
                 <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
                   {monthNames.map((m, i) => <option key={i} value={i}>{m}</option>)}
                 </select>
@@ -788,7 +810,7 @@ export default function App() {
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
                 {userRole === 'admin' && (
-                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-5 py-2 font-bold text-sm ml-2">EXPORT EXCEL</button>
+                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-5 py-2 font-bold text-[13px] ml-2">EXPORT EXCEL</button>
                 )}
               </div>
             </div>
@@ -823,7 +845,7 @@ export default function App() {
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
                         <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
-                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-xs">{formatTime(group.timestamp)}</span>
+                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[13px]">{formatTime(group.timestamp)}</span>
                         </td>
                         <td className="p-3 border-r border-gray-200 font-bold text-gray-900">
                           {group.challan_no || 'PENDING'}
@@ -850,7 +872,7 @@ export default function App() {
                                 openNoteId === group.keyValue ? (
                                   <div className="flex flex-col gap-1.5 w-full mt-1">
                                     <textarea
-                                      className="w-full border-2 border-black p-2 text-sm font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
+                                      className="w-full border-2 border-black p-2 text-[13px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
                                       rows="3"
                                       value={tempNoteText}
                                       onChange={(e) => setTempNoteText(e.target.value)}
@@ -858,8 +880,8 @@ export default function App() {
                                       autoFocus
                                     />
                                     <div className="flex gap-1.5 mt-1">
-                                      <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1.5 text-xs font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
-                                      <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-xs font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
+                                      <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1.5 text-[11px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
+                                      <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-[11px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                     </div>
                                   </div>
                                 ) : (
@@ -871,7 +893,7 @@ export default function App() {
                                       {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                     </button>
                                     {group.admin_note && (
-                                      <div className="text-sm font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
+                                      <div className="text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
                                         {group.admin_note}
                                       </div>
                                     )}
@@ -880,11 +902,11 @@ export default function App() {
                               ) : (
                                 <div className="flex flex-col items-start gap-1">
                                   {group.admin_note ? (
-                                    <div className="text-sm font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
+                                    <div className="text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
                                       {group.admin_note}
                                     </div>
                                   ) : (
-                                    <span className="text-gray-400 text-xs italic mt-1.5">No Note</span>
+                                    <span className="text-gray-400 text-[13px] italic mt-1.5">No Note</span>
                                   )}
                                 </div>
                               )}
@@ -899,12 +921,12 @@ export default function App() {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
-                              className="text-xs font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2.5 py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
+                              className="text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2.5 py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
                             >
                               PDF
                             </button>
                           ) : group.challan_no ? (
-                            <span className="text-xs text-gray-400 font-bold">LOCKED</span>
+                            <span className="text-[11px] text-gray-400 font-bold">LOCKED</span>
                           ) : (
                             <span className="text-gray-300">-</span>
                           )}
@@ -928,11 +950,11 @@ export default function App() {
                   <span className="bg-gray-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
                 </div>
                 <div className="p-4">
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
+                  {Object.keys(pendingPOs).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
                     <div className="space-y-4 max-h-[60vh] overflow-y-auto">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
                         <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-4">
-                          <div className="font-bold text-sm mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
+                          <div className="font-bold text-[13px] mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
                           <table className="w-full mb-4 border-collapse text-sm">
                             <tbody>
                               {items.map((item, idx) => (
@@ -943,7 +965,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-sm py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
+                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-[13px] py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
                         </div>
                       ))}
                     </div>
@@ -957,15 +979,15 @@ export default function App() {
                   <span className="bg-red-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
                 </div>
                 <div className="p-4 max-h-64 overflow-y-auto">
-                  {Object.keys(pendingReturns).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
+                  {Object.keys(pendingReturns).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
                     <div className="space-y-4">
                       {Object.entries(pendingReturns).map(([challanNo, items]) => (
                         <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
                           <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
                             <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-sm py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
                       ))}
                     </div>
@@ -986,7 +1008,7 @@ export default function App() {
               <form onSubmit={addToDepotCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
                 <div className="flex flex-col space-y-4">
                   <div className="relative">
-                    <label className="block text-sm font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
+                    <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
                     <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
                     {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
@@ -996,11 +1018,11 @@ export default function App() {
                   </div>
                   <div className="flex gap-4">
                     <div className="flex-1">
-                      <label className="block text-sm font-bold text-gray-700 mb-1.5">QTY</label>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">QTY</label>
                       <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
                     <div className="w-32">
-                      <label className="block text-sm font-bold text-gray-700 mb-1.5">UNIT</label>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">UNIT</label>
                       {selectedItem?.category === 'TVS' ? (
                          <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
@@ -1010,7 +1032,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="submit" className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
                     + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
                   </button>
                 </div>
@@ -1029,7 +1051,7 @@ export default function App() {
                           <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
                             <div className="flex items-center justify-end gap-2">
                               <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
-                              <span className={`font-normal text-xs ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
+                              <span className={`font-normal text-[13px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -1039,7 +1061,7 @@ export default function App() {
                   {depotMode === 'RETURN_REQUEST' && (
                     <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                     {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
                 </div>
@@ -1058,11 +1080,11 @@ export default function App() {
                   <span className="bg-gray-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
                 </div>
                 <div className="p-4">
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
+                  {Object.keys(pendingPOs).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
                     <div className="space-y-4 max-h-[60vh] overflow-y-auto">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
                         <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-4">
-                          <div className="font-bold text-sm mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
+                          <div className="font-bold text-[13px] mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
                           <table className="w-full mb-4 border-collapse text-sm">
                             <tbody>
                               {items.map((item, idx) => (
@@ -1073,7 +1095,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-sm py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
+                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-[13px] py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
                         </div>
                       ))}
                     </div>
@@ -1087,15 +1109,15 @@ export default function App() {
                   <span className="bg-red-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
                 </div>
                 <div className="p-4 max-h-64 overflow-y-auto">
-                  {Object.keys(pendingReturns).length === 0 ? <p className="text-sm text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
+                  {Object.keys(pendingReturns).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
                     <div className="space-y-4">
                       {Object.entries(pendingReturns).map(([challanNo, items]) => (
                         <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
                           <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
                             <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-sm py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
                       ))}
                     </div>
@@ -1116,7 +1138,7 @@ export default function App() {
               <form onSubmit={addToRetailCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
                 <div className="flex flex-col space-y-4">
                   <div className="relative">
-                    <label className="block text-sm font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
+                    <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
                     <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
                     {retailSearch.length > 0 && isRetailDropdownOpen && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
@@ -1126,11 +1148,11 @@ export default function App() {
                   </div>
                   <div className="flex gap-4">
                     <div className="flex-1">
-                      <label className="block text-sm font-bold text-gray-700 mb-1.5">QTY</label>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">QTY</label>
                       <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
                     <div className="w-32">
-                      <label className="block text-sm font-bold text-gray-700 mb-1.5">UNIT</label>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">UNIT</label>
                       {retailSelectedItem?.category === 'TVS' ? (
                          <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
@@ -1140,7 +1162,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="submit" className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
@@ -1159,7 +1181,7 @@ export default function App() {
                           <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
                              <div className="flex items-center justify-end gap-2">
                               <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
-                              <span className={`font-normal text-xs ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'}`}>{item.unit || getUnit(item.description)}</span>
+                              <span className={`font-normal text-[13px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -1169,7 +1191,7 @@ export default function App() {
                   {retailMode === 'RETURN' && (
                     <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
                     {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
