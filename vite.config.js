@@ -11,7 +11,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'], 
       manifest: {
-        name: 'Gujarat Oil Depot ERP System',
+        name: 'GOD eChallan',
         short_name: 'GOD eChallan',
         description: 'Gujarat Oil Depot ERP System',
         theme_color: '#0f172a',
@@ -19,18 +19,21 @@ export default defineConfig({
         display: 'standalone',
         icons: [
           {
-            // 1. The transparent PNG for Windows/Mac Desktop installations
+            // 1. Windows / Desktop Shortcut Icon
+            // Windows looks for 'any' to create standard square/transparent shortcuts.
             src: '/desktop-512x512.png', 
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any' 
           },
           {
-            // 2. The padded dark PNG for Android/iOS mobile cropping
+            // 2. Android / Mobile Home Screen Icon
+            // Android prioritizes 'maskable' to fit its adaptive app icons.
+            // Notice: 'any' is removed so Windows ignores this file.
             src: '/pwa-512x512.png', 
             sizes: '512x512',
-            type: 'image/svg+xml',
-            purpose: 'maskable any' 
+            type: 'image/png', // FIXED: This was previously image/svg+xml
+            purpose: 'maskable' 
           }
         ]
       }

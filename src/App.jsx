@@ -34,7 +34,6 @@ const blinkTitle = (msg) => {
     showMsg = !showMsg;
   }, 1000);
   
-  // Stop blinking the exact moment the user looks at the tab again
   window.addEventListener('focus', () => {
     clearInterval(titleInterval);
     document.title = originalTitle;
@@ -50,7 +49,6 @@ const triggerSystemAlert = (title, body) => {
 };
 
 export default function App() {
-  // --- AUTH & SYSTEM STATES ---
   const [session, setSession] = useState(null);
   const [userRole, setUserRole] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
@@ -58,23 +56,19 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // --- UI & DATA STATES ---
   const [view, setView] = useState(''); 
   const [masterItems, setMasterItems] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // --- PAGINATION STATES ---
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
   
-  // --- INLINE ADMIN NOTE STATE ---
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
 
-  // --- DEPOT STATES ---
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
   const [searchQuery, setSearchQuery] = useState('');
   const [qty, setQty] = useState('');
@@ -84,7 +78,6 @@ export default function App() {
   const [depotReturnNote, setDepotReturnNote] = useState(''); 
   const [pendingDepotReturns, setPendingDepotReturns] = useState({});
 
-  // --- RETAIL STATES ---
   const [retailMode, setRetailMode] = useState('PO'); 
   const [retailSearch, setRetailSearch] = useState('');
   const [retailQty, setRetailQty] = useState('');
@@ -94,22 +87,19 @@ export default function App() {
   const [isRetailDropdownOpen, setIsRetailDropdownOpen] = useState(false);
   const [retailCart, setRetailCart] = useState([]); 
   
-  // --- SHARED QUEUE STATES ---
   const [pendingPOs, setPendingPOs] = useState({}); 
   const [incomingDeliveries, setIncomingDeliveries] = useState({});
   const [pendingReturns, setPendingReturns] = useState({});
   const [isAdminAuth, setIsAdminAuth] = useState(false);
 
-  // --- MODALS ---
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
-  // --- STATIC ARRAYS ---
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // --- AUTH LOGIC ---
   useEffect(() => {
+    document.title = "GOD eChallan";
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) fetchRole(session.user.id);
@@ -146,8 +136,7 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      
-      // CRITICAL FIX: Request permissions ONLY upon manual user click (Login) to bypass browser blocks
+      // Strictly ask for permission upon manual user action
       if ("Notification" in window && Notification.permission === "default") {
         Notification.requestPermission();
       }
@@ -155,7 +144,6 @@ export default function App() {
     setIsLoggingIn(false);
   }
 
-  // --- HYPER-OPTIMIZED DATA FETCHING ---
   const fetchAvailableYears = async () => {
     const currentYear = new Date().getFullYear();
     const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
@@ -214,39 +202,33 @@ export default function App() {
 
   useEffect(() => { refreshAllData(); }, [isAdminAuth, session, ledgerMonth, ledgerYear]);
 
-  // --- REALTIME NOTIFICATIONS TRIGGER ---
+  // --- REALTIME NOTIFICATIONS ---
   useEffect(() => {
     if (!session || !userRole) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
             if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
-                triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`);
-                refreshAllData();
+                triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`); refreshAllData();
             }
             if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
-                triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`);
-                refreshAllData();
+                triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
             }
           }
           if (payload.eventType === 'UPDATE') {
              if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') {
-                 triggerSystemAlert("Goods Dispatched", `Goods dispatched under Challan ${payload.new.challan_no}`);
-                 refreshAllData();
+                 triggerSystemAlert("Goods Dispatched", `Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData();
              }
              if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') {
-                 triggerSystemAlert("Incoming Return", `Incoming Return: ${payload.new.challan_no}`);
-                 refreshAllData();
+                 triggerSystemAlert("Incoming Return", `Incoming Return: ${payload.new.challan_no}`); refreshAllData();
              }
           }
           if (payload.eventType === 'DELETE' && userRole === 'retail') {
-              triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot.");
-              refreshAllData();
+              triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot."); refreshAllData();
           }
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole]);
 
-  // --- SAVE ADMIN NOTE ---
   const saveAdminNote = async (keyField, keyValue) => {
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
@@ -256,7 +238,6 @@ export default function App() {
     } catch (error) { alert(`Failed to save note: ${error.message}`); }
   };
 
-  // --- FORMATTERS ---
   const formatDate = (dateInput) => {
     const d = dateInput ? new Date(dateInput) : new Date();
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -283,15 +264,15 @@ export default function App() {
   };
 
   const getCategory = (desc) => {
-    const item = masterItems.find(i => String(i.description).toUpperCase() === String(desc).toUpperCase()); 
+    const item = masterItems.find(i => String(i.description).trim().toUpperCase() === String(desc).trim().toUpperCase()); 
     if (item && item.category) return item.category;
-    const upperDesc = desc ? String(desc).toUpperCase() : '';
+    const upperDesc = desc ? String(desc).trim().toUpperCase() : '';
     if (upperDesc.includes('TYRE') || upperDesc.includes('TUBE') || upperDesc.match(/\d{2,3}\/\d{2,3}/)) return 'TVS';
     return 'SERVO';
   };
 
   const getUnit = (desc) => {
-    if (!desc) return ''; const upperDesc = String(desc).toUpperCase(); let cat = getCategory(desc);
+    if (!desc) return ''; const upperDesc = String(desc).trim().toUpperCase(); let cat = getCategory(desc);
     if (cat === 'SERVO') {
       if (/210\s*L/i.test(desc) || /182\s*KG/i.test(desc)) return 'BRL';
       if (/50\s*L/i.test(desc)) return 'DRUM';
@@ -304,7 +285,7 @@ export default function App() {
   };
 
   const getDisplayQty = (desc, qty, unit) => {
-    const item = masterItems.find(i => String(i.description).toUpperCase() === String(desc).toUpperCase());
+    const item = masterItems.find(i => String(i.description).trim().toUpperCase() === String(desc).trim().toUpperCase());
     const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : '';
     if (item && item.category === 'SERVO' && item.ratio && parseFloat(item.ratio) > 1) {
         const ratio = parseInt(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio;
@@ -385,7 +366,7 @@ export default function App() {
     const itemSummary = {};
     
     ledgerData.forEach(row => {
-      const desc = row.item_desc.toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      const desc = String(row.item_desc).trim().toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
       if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
     });
@@ -409,7 +390,7 @@ export default function App() {
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
-          challan: group.challan_no || '-', desc: row.item_desc.toUpperCase(), nos: String(rawQty).padStart(2, '0'),
+          challan: group.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
           adminNote: group.admin_note || '', color: bgColor, qtyColor: 'color: #000;' 
         });
@@ -433,7 +414,7 @@ export default function App() {
           leftRowsFlat.push({
             type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
             date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
-            challan: row.challan_no || '-', desc: row.item_desc.toUpperCase(), nos: String(rawQty).padStart(2, '0'),
+            challan: row.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
             note: row.note || '', color: bgColor, qtyColor: 'color: #dc2626;' 
           });
@@ -452,7 +433,7 @@ export default function App() {
         let servoTotal = 0;
         servoEntries.forEach(([desc, data]) => { 
             servoTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() }); 
+            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
         });
         rightRowsFlat.push({ type: 'summary_total', total: String(servoTotal).padStart(2, '0'), color: '#fef08a' });
     }
@@ -461,7 +442,7 @@ export default function App() {
         let tvsTotal = 0;
         tvsEntries.forEach(([desc, data]) => { 
             tvsTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() }); 
+            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
         });
         rightRowsFlat.push({ type: 'summary_total', total: String(tvsTotal).padStart(2, '0'), color: '#fef08a' });
     }
@@ -520,9 +501,9 @@ export default function App() {
         } else if (r.type === 'group_title') { 
             html += `<td colspan="3" style="background-color: ${r.bgColor}; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
-            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
-            html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;">${r.nos}</td>`;
-            html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;">${r.qty}</td>`;
+            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: ${r.bgColor}; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
+            html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: ${r.bgColor}; white-space: nowrap;">${r.nos}</td>`;
+            html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: ${r.bgColor}; white-space: nowrap;">${r.qty}</td>`;
         } else if (r.type === 'summary_total') {
             html += `<td style="background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">GROUP TOTAL:</td>`;
             html += `<td style="background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${r.total}</td>`;
@@ -534,7 +515,7 @@ export default function App() {
     html += `</table></body></html>`;
 
     const blob = new Blob([html], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    const a = document.createElement("a"); a.href = url; a.download = `GOD Ledger ${monthNames[ledgerMonth]} ${ledgerYear}.xls`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
@@ -688,7 +669,7 @@ export default function App() {
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
             {userRole && userRole !== 'admin' && (
-              <span className="ml-2 bg-white text-black px-2 py-1 rounded text-[10px] font-black border border-black shadow-sm uppercase">
+              <span className="ml-2 bg-slate-900 text-blue-300 px-2 py-1 rounded text-[10px] font-bold border border-slate-600 shadow-sm uppercase">
                 {userRole === 'depot' ? 'OIL DEPOT' : userRole === 'retail' ? 'RETAIL STORE' : userRole}
               </span>
             )}
@@ -729,7 +710,7 @@ export default function App() {
         {editPOModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW &amp; DISPATCH: {editPOModal.groupId}</h2>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto">
                 <div className="flex text-xs font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
@@ -807,7 +788,7 @@ export default function App() {
                   <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm">
                     <tr>
                       <th className="p-3 border-r border-gray-300 w-24 text-center">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300">CHALLAN NO</th>
+                      <th className="p-3 border-r border-gray-300 w-48">CHALLAN NO</th>
                       <th className="p-3 border-r border-gray-300 w-1/2">ITEM DESCRIPTION</th>
                       <th className="p-3 text-center border-r border-gray-300">NOS</th>
                       <th className="p-3 text-center border-r border-gray-300">QTY</th>
