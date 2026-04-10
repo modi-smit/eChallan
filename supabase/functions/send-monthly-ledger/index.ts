@@ -51,7 +51,7 @@ serve(async (req: any) => {
     const masterItems = masterResponse.data || [];
 
     const getCategory = (desc: any) => {
-      const item = masterItems.find((i: any) => i.description === desc);
+      const item = masterItems.find((i: any) => String(i.description).toUpperCase() === String(desc).toUpperCase());
       if (item && item.category) return item.category;
       const upperDesc = desc ? String(desc).toUpperCase() : '';
       if (upperDesc.includes('TYRE') || upperDesc.includes('TUBE') || upperDesc.match(/\d{2,3}\/\d{2,3}/)) return 'TVS';
@@ -72,7 +72,7 @@ serve(async (req: any) => {
     };
 
     const getDisplayQty = (desc: any, qty: any, unit: any) => {
-      const item = masterItems.find((i: any) => i.description === desc);
+      const item = masterItems.find((i: any) => String(i.description).toUpperCase() === String(desc).toUpperCase());
       const isNegative = qty < 0;
       const absQty = Math.abs(qty);
       const sign = isNegative ? '- ' : '';
@@ -137,21 +137,20 @@ serve(async (req: any) => {
     const servoEntries = summaryEntries.filter(([_, data]: any) => data.category === 'SERVO');
     const tvsEntries = summaryEntries.filter(([_, data]: any) => data.category === 'TVS');
 
-    // === USER REQUESTED FILENAME FORMAT ===
     const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
     const cycleTitle = `${monthNames[month]} ${year}`; 
 
     let leftRowsFlat: any[] = [];
-    leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${cycleTitle})`, isReturn: false });
-    leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: false });
-    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], isReturn: false });
+    leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${cycleTitle})`, bgColor: '#d1d5db' });
+    leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, bgColor: '#f3f4f6' });
+    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], bgColor: '#e5e7eb' });
 
+    let globalTxTotal = 0;
     dispatchedGroups.forEach((group: any) => {
       let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
-      let groupTotal = 0;
       group.items.forEach((row: any, i: number) => {
         const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
-        groupTotal += rawQty;
+        globalTxTotal += rawQty;
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDateIST(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTimeIST(group.date)}`,
@@ -162,20 +161,24 @@ serve(async (req: any) => {
           color: bgColor, qtyColor: 'color: #000;' 
         });
       });
-      leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: false });
     });
+    
+    if (dispatchedGroups.length > 0) {
+      leftRowsFlat.push({ type: 'global_total', color: '#d1d5db', total: String(globalTxTotal).padStart(2, '0') });
+    }
 
     if (returnGroups.length > 0) {
       leftRowsFlat.push({ type: 'empty' });
-      leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - RETURN LEDGER (${cycleTitle})`, isReturn: true });
-      leftRowsFlat.push({ type: 'subtitle', title: `RETURNED BY: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, isReturn: true });
-      leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'RETURN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'REMARKS / NOTE'], isReturn: true });
+      leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - RETURN LEDGER (${cycleTitle})`, bgColor: '#fca5a5' });
+      leftRowsFlat.push({ type: 'subtitle', title: `RETURNED BY: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, bgColor: '#fee2e2' });
+      leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'RETURN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'REMARKS / NOTE'], bgColor: '#fecaca' });
+      
+      let globalReturnTotal = 0;
       returnGroups.forEach((group: any) => {
-        let bgColor = "#fee2e2"; 
-        let groupTotal = 0;
+        let bgColor = "#fef2f2"; 
         group.items.forEach((row: any, i: number) => {
           const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
-          groupTotal += rawQty;
+          globalReturnTotal += rawQty;
           leftRowsFlat.push({
             type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
             date: `${formatDateIST(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTimeIST(row.timestamp)}`,
@@ -186,25 +189,32 @@ serve(async (req: any) => {
             color: bgColor, qtyColor: 'color: #dc2626;' 
           });
         });
-        leftRowsFlat.push({ type: 'total', color: bgColor, total: String(groupTotal).padStart(2, '0'), isReturn: true });
       });
+      leftRowsFlat.push({ type: 'global_total', color: '#fca5a5', total: String(globalReturnTotal).padStart(2, '0') });
     }
 
     let rightRowsFlat: any[] = [];
-    rightRowsFlat.push({ type: 'title', title: `ITEM WISE SUMMARY` });
-    rightRowsFlat.push({ type: 'subtitle', title: `TOTAL SKUS: ${summaryEntries.length}` });
-    rightRowsFlat.push({ type: 'header', cols: ['ITEM DESCRIPTION', 'TOTAL NOS', 'CONVERTED QTY'] });
+    rightRowsFlat.push({ type: 'title', title: `ITEM WISE SUMMARY`, bgColor: '#fde047' });
+    rightRowsFlat.push({ type: 'subtitle', title: `TOTAL SKUS: ${summaryEntries.length}`, bgColor: '#fef08a' });
+    rightRowsFlat.push({ type: 'header', cols: ['ITEM DESCRIPTION', 'TOTAL NOS', 'CONVERTED QTY'], bgColor: '#fef9c3' });
+    
     if (servoEntries.length > 0) {
-        rightRowsFlat.push({ type: 'group_title', title: 'SERVO LUBRICANTS' });
+        rightRowsFlat.push({ type: 'group_title', title: 'SERVO LUBRICANTS', bgColor: '#fde047' });
+        let servoTotal = 0;
         servoEntries.forEach(([desc, data]: any) => {
+           servoTotal += data.qty;
            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() });
         });
+        rightRowsFlat.push({ type: 'summary_total', total: String(servoTotal).padStart(2, '0'), color: '#fef08a' });
     }
     if (tvsEntries.length > 0) {
-        rightRowsFlat.push({ type: 'group_title', title: 'TVS TYRES & TUBES' });
+        rightRowsFlat.push({ type: 'group_title', title: 'TVS TYRES & TUBES', bgColor: '#fde047' });
+        let tvsTotal = 0;
         tvsEntries.forEach(([desc, data]: any) => {
+           tvsTotal += data.qty;
            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase() });
         });
+        rightRowsFlat.push({ type: 'summary_total', total: String(tvsTotal).padStart(2, '0'), color: '#fef08a' });
     }
 
     const maxRows = Math.max(leftRowsFlat.length, rightRowsFlat.length);
@@ -218,13 +228,13 @@ serve(async (req: any) => {
         const l = leftRowsFlat[i];
         const spanLimit = 6;
         if (l.type === 'title') {
-            html += `<td colspan=\"${spanLimit}\" style=\"background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${l.title}</td>`;
+            html += `<td colspan=\"${spanLimit}\" style=\"background-color: ${l.bgColor}; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${l.title}</td>`;
         } else if (l.type === 'subtitle') {
-            html += `<td colspan=\"${spanLimit}\" style=\"background-color: #f3f4f6; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${l.title}</td>`;
+            html += `<td colspan=\"${spanLimit}\" style=\"background-color: ${l.bgColor}; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${l.title}</td>`;
         } else if (l.type === 'header') {
             l.cols.forEach((col: any, idx: number) => {
                 const align = (idx === 2) ? 'left' : 'center'; 
-                html += `<td style=\"background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;\">${col}</td>`;
+                html += `<td style=\"background-color: ${l.bgColor}; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;\">${col}</td>`;
             });
         } else if (l.type === 'data') {
             if (l.isFirst) {
@@ -239,8 +249,8 @@ serve(async (req: any) => {
             } else {
                 if (l.isFirst) html += `<td rowspan=\"${l.rowspan}\" style=\"background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;\">${l.adminNote || ''}</td>`;
             }
-        } else if (l.type === 'total') {
-            html += `<td colspan=\"3\" style=\"background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;\">TOTAL:</td>`;
+        } else if (l.type === 'global_total') {
+            html += `<td colspan=\"3\" style=\"background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;\">GRAND TOTAL:</td>`;
             html += `<td style=\"background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;\">${l.total}</td>`;
             html += `<td style=\"background-color: ${l.color}; border: 1px solid black; padding: 8px;\"></td>`;
             html += `<td style=\"background-color: ${l.color}; border: 1px solid black; padding: 8px;\"></td>`;
@@ -254,20 +264,24 @@ serve(async (req: any) => {
       if (i < rightRowsFlat.length) {
         const r = rightRowsFlat[i];
         if (r.type === 'title') {
-            html += `<td colspan=\"3\" style=\"background-color: #d1d5db; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
+            html += `<td colspan=\"3\" style=\"background-color: ${r.bgColor}; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
         } else if (r.type === 'subtitle') {
-            html += `<td colspan=\"3\" style=\"background-color: #ffffff; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
+            html += `<td colspan=\"3\" style=\"background-color: ${r.bgColor}; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
         } else if (r.type === 'header') {
             r.cols.forEach((col: any, idx: number) => {
                 const align = (idx === 0) ? 'left' : 'center';
-                html += `<td style=\"background-color: #e5e7eb; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;\">${col}</td>`;
+                html += `<td style=\"background-color: ${r.bgColor}; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;\">${col}</td>`;
             });
         } else if (r.type === 'group_title') {
-            html += `<td colspan=\"3\" style=\"background-color: #dbeafe; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
+            html += `<td colspan=\"3\" style=\"background-color: ${r.bgColor}; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;\">${r.title}</td>`;
         } else if (r.type === 'summary_data') {
             html += `<td style=\"border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: #ffffff; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;\">${r.desc}</td>`;
             html += `<td style=\"border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: #ffffff; white-space: nowrap;\">${r.nos}</td>`;
             html += `<td style=\"border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: #ffffff; white-space: nowrap;\">${r.qty}</td>`;
+        } else if (r.type === 'summary_total') {
+            html += `<td style=\"background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;\">GROUP TOTAL:</td>`;
+            html += `<td style=\"background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;\">${r.total}</td>`;
+            html += `<td style=\"background-color: ${r.color}; border: 1px solid black; padding: 8px;\"></td>`;
         }
       } else {
         html += `<td style=\"border: none; background-color: transparent;\"></td>`.repeat(3);
