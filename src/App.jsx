@@ -514,7 +514,7 @@ export default function App() {
     html += `</table></body></html>`;
 
     const blob = new Blob([html], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `GOD Ledger ${monthNames[ledgerMonth]} ${ledgerYear}.xls`;
+    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
