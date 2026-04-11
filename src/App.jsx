@@ -68,6 +68,14 @@ export default function App() {
   const [liveStock, setLiveStock] = useState([]);
   const [isFetchingStock, setIsFetchingStock] = useState(false);
   
+  // MASTER ADJUSTMENT STATE
+  const [adjustStockModal, setAdjustStockModal] = useState(false);
+  const [adjustSearch, setAdjustSearch] = useState('');
+  const [adjustItem, setAdjustItem] = useState(null);
+  const [adjustQty, setAdjustQty] = useState('');
+  const [adjustUnit, setAdjustUnit] = useState('CANS');
+  const [adjustNote, setAdjustNote] = useState('');
+  
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
@@ -198,7 +206,7 @@ export default function App() {
 
     const { data, count } = await supabase.from('transactions')
       .select('*', { count: 'exact' })
-      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
+      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'STOCK_ADJUSTMENT'])
       .gte('timestamp', startDate)
       .lte('timestamp', endDate)
       .order('timestamp', { ascending: false })
@@ -213,7 +221,7 @@ export default function App() {
     setIsFetchingStock(true);
     const { data } = await supabase.from('transactions')
       .select('item_desc, disp_qty, req_qty, status, unit')
-      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED']);
+      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'STOCK_ADJUSTMENT']);
 
     if (data) {
       const inventory = {};
@@ -222,7 +230,7 @@ export default function App() {
           let q = parseInt(row.disp_qty || row.req_qty) || 0;
           if (!inventory[desc]) inventory[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
           if (row.status === 'RETURN_ACCEPTED') inventory[desc].qty -= q;
-          else inventory[desc].qty += q;
+          else inventory[desc].qty += q; // Applies to ACCEPTED, DISPATCHED, and STOCK_ADJUSTMENT (which handles its own negative values)
       });
       const stockArr = Object.entries(inventory).filter(([_, v]) => v.qty !== 0).map(([k, v]) => ({ desc: k, ...v })).sort((a,b) => a.category.localeCompare(b.category) || a.desc.localeCompare(b.desc));
       setLiveStock(stockArr);
@@ -303,7 +311,27 @@ export default function App() {
     if (window.confirm(`MASTER OVERRIDE: Permanently delete all records for ${keyValue}? This cannot be undone.`)) {
       const { error } = await supabase.from('transactions').delete().eq(keyField, keyValue);
       if (error) alert(`Deletion Failed: ${error.message}`);
-      else refreshAllData();
+      else { refreshAllData(); fetchLiveStock(); }
+    }
+  };
+
+  const submitMasterAdjustment = async (e) => {
+    e.preventDefault();
+    if (!adjustItem || !adjustQty) return;
+    const numQty = parseInt(adjustQty);
+    if (isNaN(numQty) || numQty === 0) return;
+    
+    const groupId = 'ADJ-' + Date.now();
+    const tx = {
+      group_id: groupId, challan_no: groupId, item_desc: adjustItem.description,
+      disp_qty: numQty, unit: adjustUnit, status: 'STOCK_ADJUSTMENT', note: adjustNote || 'Opening/Manual Balance'
+    };
+    
+    const { error } = await supabase.from('transactions').insert([tx]);
+    if (error) { alert(`Error: ${error.message}`); }
+    else {
+      setAdjustSearch(''); setAdjustQty(''); setAdjustItem(null); setAdjustNote(''); setAdjustStockModal(false);
+      refreshAllData(); fetchLiveStock();
     }
   };
 
@@ -417,12 +445,16 @@ export default function App() {
   // --- EXCEL ENGINE ---
   const downloadLedger = () => {
     if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
-    const dispatchedDataObj = {}; const returnsDataObj = {};
+    const dispatchedDataObj = {}; const returnsDataObj = {}; const adjDataObj = {};
+    
     ledgerData.forEach(row => {
       const key = row.challan_no || row.group_id;
       if (row.status === 'RETURN_ACCEPTED') {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
+      } else if (row.status === 'STOCK_ADJUSTMENT') {
+         if (!adjDataObj['ADJ']) adjDataObj['ADJ'] = { isAdjGroup: true, items: [], date: row.timestamp };
+         adjDataObj['ADJ'].items.push(row);
       } else {
          if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
          if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
@@ -432,12 +464,13 @@ export default function App() {
 
     const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
     const returnGroups = Object.values(returnsDataObj);
+    const adjGroups = Object.values(adjDataObj);
     const itemSummary = {};
     
     ledgerData.forEach(row => {
       const desc = String(row.item_desc).trim().toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
-      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED' || row.status === 'STOCK_ADJUSTMENT') itemSummary[desc].qty += q;
     });
 
     const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
@@ -465,9 +498,7 @@ export default function App() {
         });
       });
     });
-    if (dispatchedGroups.length > 0) {
-      leftRowsFlat.push({ type: 'global_total', color: '#d1d5db', total: String(globalTxTotal).padStart(2, '0') });
-    }
+    if (dispatchedGroups.length > 0) leftRowsFlat.push({ type: 'global_total', color: '#d1d5db', total: String(globalTxTotal).padStart(2, '0') });
 
     if (returnGroups.length > 0) {
       leftRowsFlat.push({ type: 'empty' });
@@ -490,6 +521,27 @@ export default function App() {
         });
       });
       leftRowsFlat.push({ type: 'global_total', color: '#fca5a5', total: String(globalReturnTotal).padStart(2, '0') });
+    }
+
+    if (adjGroups.length > 0) {
+      leftRowsFlat.push({ type: 'empty' });
+      leftRowsFlat.push({ type: 'title', title: `MANUAL INVENTORY ADJUSTMENTS (${monthNames[ledgerMonth]} ${ledgerYear})`, bgColor: '#e9d5ff' });
+      leftRowsFlat.push({ type: 'subtitle', title: `MASTER OVERRIDE RECORDS`, bgColor: '#f3e8ff' });
+      leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'ADJ ID', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'NOTE'], bgColor: '#d8b4fe' });
+
+      adjGroups.forEach(group => {
+        let bgColor = "#faf5ff"; 
+        group.items.forEach((row, i) => {
+          const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
+          leftRowsFlat.push({
+            type: 'data', isReturn: false, isFirst: true, rowspan: 1, 
+            date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
+            challan: row.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
+            qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
+            adminNote: row.note || '', color: bgColor, qtyColor: 'color: #6b21a8;' 
+          });
+        });
+      });
     }
 
     let rightRowsFlat = [];
@@ -734,7 +786,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[13px]">
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
             {userRole && (
@@ -745,9 +797,7 @@ export default function App() {
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
                   <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs font-bold ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
-                )}
+                <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
                 <button onClick={() => { setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
@@ -822,6 +872,43 @@ export default function App() {
           </div>
         )}
 
+        {adjustStockModal && userRole === 'master' && (
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[70]">
+            <div className="bg-purple-50 border-2 border-purple-900 max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(88,28,135,1)]">
+              <h2 className="text-lg font-black border-b-2 border-purple-900 pb-3 mb-4 uppercase text-purple-900 tracking-wider">🛠️ MASTER INVENTORY OVERRIDE</h2>
+              <form onSubmit={submitMasterAdjustment} className="space-y-4">
+                  <div className="relative">
+                    <label className="block text-xs font-bold text-purple-900 mb-1">SEARCH ITEM</label>
+                    <input type="text" value={adjustSearch} onKeyDown={(e) => handleKeyDown(e, smartSearch(adjustSearch), setAdjustItem, setAdjustSearch, null, setAdjustUnit, 'adj-item')} onChange={(e) => { setAdjustSearch(e.target.value); setAdjustItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="TYPE TO SEARCH..." />
+                    {adjustSearch.length > 0 && smartSearch(adjustSearch).length > 0 && !adjustItem && (
+                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-purple-900 mt-1 shadow-xl text-sm font-bold">
+                        {smartSearch(adjustSearch).map((item, i) => <div id={`adj-item-${i}`} key={i} onClick={() => handleItemSelect(item, setAdjustItem, setAdjustUnit, setAdjustSearch, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-purple-900 text-white' : 'hover:bg-purple-100'}`}>{item.description}</div>)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <label className="block text-xs font-bold text-purple-900 mb-1">QTY (Use - for deduction)</label>
+                      <input type="number" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="e.g. 50 or -10" />
+                    </div>
+                    <div className="w-28">
+                      <label className="block text-xs font-bold text-purple-900 mb-1">UNIT</label>
+                      <input type="text" value={adjustUnit} disabled className="w-full border-2 border-purple-300 p-2.5 bg-purple-100 text-purple-600 text-sm font-bold select-text" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-purple-900 mb-1">AUDIT NOTE (Optional)</label>
+                    <input type="text" value={adjustNote} onChange={(e) => setAdjustNote(e.target.value)} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="e.g. Opening Balance / Damaged Stock" />
+                  </div>
+                  <div className="flex space-x-3 pt-2">
+                    <button type="button" onClick={() => { setAdjustStockModal(false); setAdjustItem(null); setAdjustSearch(''); setAdjustQty(''); }} className="flex-1 border-2 border-purple-900 bg-white py-3 text-sm font-bold hover:bg-gray-100 text-purple-900 uppercase">CANCEL</button>
+                    <button type="submit" className="flex-1 border-2 border-purple-900 bg-purple-900 text-white py-3 text-sm font-black hover:bg-purple-950 uppercase tracking-widest shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">EXECUTE</button>
+                  </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -835,18 +922,23 @@ export default function App() {
           <div className="w-full bg-white border-2 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
             <div className="flex justify-between items-center border-b-2 border-black pb-3 mb-4">
                <h2 className="text-xl font-black uppercase tracking-wider">LIVE INVENTORY DASHBOARD</h2>
-               <button onClick={fetchLiveStock} className="bg-gray-200 border border-black px-3 py-1 font-bold text-xs uppercase shadow-sm hover:bg-gray-300">↻ REFRESH</button>
+               <div className="flex gap-2">
+                  <button onClick={fetchLiveStock} className="bg-gray-200 border border-black px-3 py-1 font-bold text-xs uppercase shadow-sm hover:bg-gray-300">↻ REFRESH</button>
+                  {userRole === 'master' && (
+                    <button onClick={() => setAdjustStockModal(true)} className="bg-purple-900 text-white border border-black px-3 py-1 font-black text-xs uppercase shadow-sm hover:bg-purple-800 tracking-wide">+ ADJUST STOCK</button>
+                  )}
+               </div>
             </div>
             {isFetchingStock ? (
                <p className="text-center py-10 font-bold text-gray-500 uppercase animate-pulse">Calculating Live Stock...</p>
             ) : (
                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                  <table className="w-full text-left border-collapse text-sm">
-                   <thead className="bg-yellow-100 border-b-2 border-black font-bold uppercase sticky top-0 shadow-sm text-[13px] text-yellow-900">
+                   <thead className="bg-yellow-100 border-b-2 border-black font-bold uppercase sticky top-0 shadow-sm text-[13px] text-yellow-900 z-10">
                      <tr>
                        <th className="p-3 border-r border-black w-32">CATEGORY</th>
                        <th className="p-3 border-r border-black">ITEM DESCRIPTION</th>
-                       <th className="p-3 text-center border-r border-black w-40">NET STOCK (NOS)</th>
+                       <th className="p-3 text-center border-r border-black w-40">QTY / NET STOCK</th>
                        <th className="p-3 text-center w-24">UNIT</th>
                      </tr>
                    </thead>
@@ -923,7 +1015,7 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
-                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
+                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : group.status === 'STOCK_ADJUSTMENT' ? 'bg-purple-50' : 'bg-blue-50'} select-text`}>
                         <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
                           {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[13px]">{formatTime(group.timestamp)}</span>
                         </td>
@@ -932,21 +1024,21 @@ export default function App() {
                         </td>
                         <td className="p-3 border-r border-gray-200">
                           <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className="font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[300px] xl:max-w-[400px]" title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                            {group.items.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[300px] xl:max-w-[400px] ${group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-900' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
                           </ul>
                         </td>
                         <td className="p-3 border-r border-gray-200 text-center">
                           <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900':''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900': group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-900' : ''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
                           </ul>
                         </td>
                         <td className="p-3 border-r border-gray-200 text-center whitespace-nowrap">
                            <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600': group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-600' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
                           </ul>
                         </td>
                         <td className="p-3 border-r border-gray-200 align-top select-none">
-                          {group.status !== 'RETURN_ACCEPTED' ? (
+                          {group.status !== 'RETURN_ACCEPTED' && group.status !== 'STOCK_ADJUSTMENT' ? (
                             <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
                               {(userRole === 'admin' || userRole === 'master') ? (
                                 openNoteId === group.keyValue ? (
@@ -991,12 +1083,14 @@ export default function App() {
                                 </div>
                               )}
                             </div>
+                          ) : group.status === 'STOCK_ADJUSTMENT' ? (
+                            <div className="text-sm font-bold text-purple-900">{group.items[0]?.note || 'Opening Balance'}</div>
                           ) : (
                             <div className="text-center text-gray-400 text-sm">-</div>
                           )}
                         </td>
                         <td className="p-3 text-center vertical-middle select-none">
-                          {group.challan_no && isWithin30Days(group.timestamp) ? (
+                          {group.challan_no && isWithin30Days(group.timestamp) && group.status !== 'STOCK_ADJUSTMENT' ? (
                             <button onClick={() => {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
