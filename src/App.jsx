@@ -70,19 +70,9 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // PAGINATION & STOCK STATE
+  // PAGINATION STATE
   const [ledgerLimit, setLedgerLimit] = useState(50);
   const [totalLedgerCount, setTotalLedgerCount] = useState(0);
-  const [liveStock, setLiveStock] = useState([]);
-  const [isFetchingStock, setIsFetchingStock] = useState(false);
-  
-  // MASTER ADJUSTMENT STATE
-  const [adjustStockModal, setAdjustStockModal] = useState(false);
-  const [adjustSearch, setAdjustSearch] = useState('');
-  const [adjustItem, setAdjustItem] = useState(null);
-  const [adjustQty, setAdjustQty] = useState('');
-  const [adjustUnit, setAdjustUnit] = useState('CANS');
-  const [adjustNote, setAdjustNote] = useState('');
   
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
@@ -185,8 +175,11 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
+      // ONLY ASK ONCE PER DEVICE
+      if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
+        Notification.requestPermission().then(() => {
+          localStorage.setItem("god_notif_asked", "true");
+        });
       }
     }
     setIsLoggingIn(false);
@@ -249,28 +242,6 @@ export default function App() {
 
     if (data) setLedgerData(data);
     if (count !== null) setTotalLedgerCount(count);
-  };
-
-  const fetchLiveStock = async () => {
-    if(!isOnline) return;
-    setIsFetchingStock(true);
-    const { data } = await supabase.from('transactions')
-      .select('item_desc, disp_qty, req_qty, status, unit')
-      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'STOCK_ADJUSTMENT']);
-
-    if (data) {
-      const inventory = {};
-      data.forEach(row => {
-          let desc = String(row.item_desc).trim().toUpperCase();
-          let q = parseInt(row.disp_qty || row.req_qty) || 0;
-          if (!inventory[desc]) inventory[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
-          if (row.status === 'RETURN_ACCEPTED') inventory[desc].qty -= q;
-          else inventory[desc].qty += q; 
-      });
-      const stockArr = Object.entries(inventory).filter(([_, v]) => v.qty !== 0).map(([k, v]) => ({ desc: k, ...v })).sort((a,b) => a.category.localeCompare(b.category) || a.desc.localeCompare(b.desc));
-      setLiveStock(stockArr);
-    }
-    setIsFetchingStock(false);
   };
 
   const refreshAllData = async () => {
@@ -353,7 +324,6 @@ export default function App() {
     if (syncedCount > 0) {
       triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`);
       refreshAllData();
-      if(view === 'stock') fetchLiveStock();
     }
   };
 
@@ -366,7 +336,6 @@ export default function App() {
       } else {
          triggerSystemAlert(alertTitle, alertMsg);
          refreshAllData();
-         if(view === 'stock') fetchLiveStock();
       }
     } else {
       setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
@@ -391,28 +360,7 @@ export default function App() {
     if (window.confirm(`MASTER OVERRIDE: Permanently delete all records for ${keyValue}? This cannot be undone.`)) {
       const { error } = await supabase.from('transactions').delete().eq(keyField, keyValue);
       if (error) alert(`Deletion Failed: ${error.message}`);
-      else { refreshAllData(); fetchLiveStock(); }
-    }
-  };
-
-  const submitMasterAdjustment = async (e) => {
-    e.preventDefault();
-    if(!isOnline) { alert("Internet required to adjust stock."); return; }
-    if (!adjustItem || !adjustQty) return;
-    const numQty = parseInt(adjustQty);
-    if (isNaN(numQty) || numQty === 0) return;
-    
-    const groupId = 'ADJ-' + Date.now();
-    const tx = {
-      group_id: groupId, challan_no: groupId, item_desc: adjustItem.description,
-      disp_qty: numQty, unit: adjustUnit, status: 'STOCK_ADJUSTMENT', note: adjustNote || 'Opening/Manual Balance'
-    };
-    
-    const { error } = await supabase.from('transactions').insert([tx]);
-    if (error) { alert(`Error: ${error.message}`); }
-    else {
-      setAdjustSearch(''); setAdjustQty(''); setAdjustItem(null); setAdjustNote(''); setAdjustStockModal(false);
-      refreshAllData(); fetchLiveStock();
+      else { refreshAllData(); }
     }
   };
 
@@ -521,10 +469,13 @@ export default function App() {
     doc.line(5, tableBottom + 6, 143, tableBottom + 6); doc.line(15, tableTop, 15, tableBottom + 6); doc.line(97, tableTop, 97, tableBottom + 6); doc.line(112, tableTop, 112, tableBottom + 6); 
     const sigY = 183; doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); doc.setTextColor(0, 0, 0); 
+      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); 
+      // NEW: Left side auth timestamp
+      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate()} ${formatTime()}`, 8, sigY + 10);
     }
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+    // Keep right side auth timestamp as well for the issuer
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate()} ${formatTime()}`, 140, sigY + 4, { align: "right" });
     doc.setLineWidth(0.4); doc.rect(5, 5, 138, 195); doc.save(`${challanNo}.pdf`);
   };
@@ -532,17 +483,14 @@ export default function App() {
   // --- EXCEL ENGINE ---
   const downloadLedger = () => {
     if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
-    const dispatchedDataObj = {}; const returnsDataObj = {}; const adjDataObj = {};
+    const dispatchedDataObj = {}; const returnsDataObj = {};
     
     ledgerData.forEach(row => {
       const key = row.challan_no || row.group_id;
       if (row.status === 'RETURN_ACCEPTED') {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
-      } else if (row.status === 'STOCK_ADJUSTMENT') {
-         if (!adjDataObj['ADJ']) adjDataObj['ADJ'] = { isAdjGroup: true, items: [], date: row.timestamp };
-         adjDataObj['ADJ'].items.push(row);
-      } else {
+      } else if (row.status !== 'STOCK_ADJUSTMENT') {
          if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
          if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
          dispatchedDataObj[key].items.push(row);
@@ -551,13 +499,13 @@ export default function App() {
 
     const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
     const returnGroups = Object.values(returnsDataObj);
-    const adjGroups = Object.values(adjDataObj);
     const itemSummary = {};
     
     ledgerData.forEach(row => {
+      if (row.status === 'STOCK_ADJUSTMENT') return; // Ignore adjustments in the pure transaction ledger
       const desc = String(row.item_desc).trim().toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
-      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED' || row.status === 'STOCK_ADJUSTMENT') itemSummary[desc].qty += q;
+      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
     });
 
     const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
@@ -608,27 +556,6 @@ export default function App() {
         });
       });
       leftRowsFlat.push({ type: 'global_total', color: '#fca5a5', total: String(globalReturnTotal).padStart(2, '0') });
-    }
-
-    if (adjGroups.length > 0) {
-      leftRowsFlat.push({ type: 'empty' });
-      leftRowsFlat.push({ type: 'title', title: `MANUAL INVENTORY ADJUSTMENTS (${monthNames[ledgerMonth]} ${ledgerYear})`, bgColor: '#e9d5ff' });
-      leftRowsFlat.push({ type: 'subtitle', title: `MASTER OVERRIDE RECORDS`, bgColor: '#f3e8ff' });
-      leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'ADJ ID', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'NOTE'], bgColor: '#d8b4fe' });
-
-      adjGroups.forEach(group => {
-        let bgColor = "#faf5ff"; 
-        group.items.forEach((row, i) => {
-          const rawQty = parseInt(row.disp_qty || row.req_qty) || 0;
-          leftRowsFlat.push({
-            type: 'data', isReturn: false, isFirst: true, rowspan: 1, 
-            date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
-            challan: row.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
-            qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-            adminNote: row.note || '', color: bgColor, qtyColor: 'color: #6b21a8;' 
-          });
-        });
-      });
     }
 
     let rightRowsFlat = [];
@@ -898,9 +825,6 @@ export default function App() {
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
                   <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs font-bold ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
-                )}
                 <button onClick={() => { setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
@@ -976,43 +900,6 @@ export default function App() {
           </div>
         )}
 
-        {adjustStockModal && userRole === 'master' && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[70]">
-            <div className="bg-purple-50 border-2 border-purple-900 max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(88,28,135,1)]">
-              <h2 className="text-lg font-black border-b-2 border-purple-900 pb-3 mb-4 uppercase text-purple-900 tracking-wider">🛠️ MASTER INVENTORY OVERRIDE</h2>
-              <form onSubmit={submitMasterAdjustment} className="space-y-4">
-                  <div className="relative">
-                    <label className="block text-xs font-bold text-purple-900 mb-1">SEARCH ITEM</label>
-                    <input type="text" value={adjustSearch} onKeyDown={(e) => handleKeyDown(e, smartSearch(adjustSearch), setAdjustItem, setAdjustSearch, null, setAdjustUnit, 'adj-item')} onChange={(e) => { setAdjustSearch(e.target.value); setAdjustItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="TYPE TO SEARCH..." />
-                    {adjustSearch.length > 0 && smartSearch(adjustSearch).length > 0 && !adjustItem && (
-                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-purple-900 mt-1 shadow-xl text-sm font-bold">
-                        {smartSearch(adjustSearch).map((item, i) => <div id={`adj-item-${i}`} key={i} onClick={() => handleItemSelect(item, setAdjustItem, setAdjustUnit, setAdjustSearch, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-purple-900 text-white' : 'hover:bg-purple-100'}`}>{item.description}</div>)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex gap-4">
-                    <div className="flex-1">
-                      <label className="block text-xs font-bold text-purple-900 mb-1">QTY (Use - for deduction)</label>
-                      <input type="number" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="e.g. 50 or -10" />
-                    </div>
-                    <div className="w-28">
-                      <label className="block text-xs font-bold text-purple-900 mb-1">UNIT</label>
-                      <input type="text" value={adjustUnit} disabled className="w-full border-2 border-purple-300 p-2.5 bg-purple-100 text-purple-600 text-sm font-bold select-text" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-purple-900 mb-1">AUDIT NOTE (Optional)</label>
-                    <input type="text" value={adjustNote} onChange={(e) => setAdjustNote(e.target.value)} className="w-full border-2 border-purple-900 p-2.5 text-sm font-bold focus:outline-none focus:bg-white select-text" placeholder="e.g. Opening Balance / Damaged Stock" />
-                  </div>
-                  <div className="flex space-x-3 pt-2">
-                    <button type="button" onClick={() => { setAdjustStockModal(false); setAdjustItem(null); setAdjustSearch(''); setAdjustQty(''); }} className="flex-1 border-2 border-purple-900 bg-white py-3 text-sm font-bold hover:bg-gray-100 text-purple-900 uppercase">CANCEL</button>
-                    <button type="submit" className="flex-1 border-2 border-purple-900 bg-purple-900 text-white py-3 text-sm font-black hover:bg-purple-950 uppercase tracking-widest shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">EXECUTE</button>
-                  </div>
-              </form>
-            </div>
-          </div>
-        )}
-
         {/* VIEWS */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
@@ -1020,48 +907,6 @@ export default function App() {
               <h2 className="text-xl font-black text-red-800 mb-2">NO TERMINAL ASSIGNED</h2>
               <p className="font-bold text-gray-800 text-sm">Your account does not have a valid role assigned in the database.</p>
             </div>
-          </div>
-        )}
-
-        {view === 'stock' && (
-          <div className="w-full bg-white border-2 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-            <div className="flex justify-between items-center border-b-2 border-black pb-3 mb-4">
-               <h2 className="text-xl font-black uppercase tracking-wider">LIVE INVENTORY DASHBOARD</h2>
-               <div className="flex gap-2">
-                  <button onClick={fetchLiveStock} className="bg-gray-200 border border-black px-3 py-1 font-bold text-xs uppercase shadow-sm hover:bg-gray-300">↻ REFRESH</button>
-                  {userRole === 'master' && (
-                    <button onClick={() => setAdjustStockModal(true)} className="bg-purple-900 text-white border border-black px-3 py-1 font-black text-xs uppercase shadow-sm hover:bg-purple-800 tracking-wide">+ ADJUST STOCK</button>
-                  )}
-               </div>
-            </div>
-            {isFetchingStock ? (
-               <p className="text-center py-10 font-bold text-gray-500 uppercase animate-pulse">Calculating Live Stock...</p>
-            ) : (
-               <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-                 <table className="w-full text-left border-collapse text-sm">
-                   <thead className="bg-yellow-100 border-b-2 border-black font-bold uppercase sticky top-0 shadow-sm text-[13px] text-yellow-900 z-10">
-                     <tr>
-                       <th className="p-3 border-r border-black w-32">CATEGORY</th>
-                       <th className="p-3 border-r border-black">ITEM DESCRIPTION</th>
-                       <th className="p-3 text-center border-r border-black w-40">QTY / NET STOCK</th>
-                       <th className="p-3 text-center w-24">UNIT</th>
-                     </tr>
-                   </thead>
-                   <tbody>
-                     {liveStock.length === 0 ? (
-                        <tr><td colSpan="4" className="text-center py-6 font-bold text-gray-400">NO STOCK FOUND</td></tr>
-                     ) : liveStock.map((item, idx) => (
-                       <tr key={idx} className="border-b border-gray-300 hover:bg-yellow-50 font-bold text-gray-800 select-text">
-                         <td className="p-3 border-r border-gray-300">{item.category}</td>
-                         <td className="p-3 border-r border-gray-300 uppercase">{item.desc}</td>
-                         <td className="p-3 border-r border-gray-300 text-center text-blue-800 text-base">{item.qty}</td>
-                         <td className="p-3 text-center text-xs text-gray-500">{item.unit}</td>
-                       </tr>
-                     ))}
-                   </tbody>
-                 </table>
-               </div>
-            )}
           </div>
         )}
 
@@ -1096,14 +941,14 @@ export default function App() {
                 <table className="w-full text-left border-collapse text-sm">
                   <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm text-sm">
                     <tr>
-                      <th className="p-3 border-r border-gray-300 w-28 text-center select-text">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300 select-text">CHALLAN NO</th>
-                      <th className="p-3 border-r border-gray-300 w-1/2 select-text">ITEM DESCRIPTION</th>
-                      <th className="p-3 text-center border-r border-gray-300 select-text">NOS</th>
+                      <th className="p-3 border-r border-gray-300 w-28 text-center select-text whitespace-nowrap">DATE / TIME</th>
+                      <th className="p-3 border-r border-gray-300 select-text whitespace-nowrap">CHALLAN NO</th>
+                      <th className="p-3 border-r border-gray-300 w-1/2 select-text whitespace-nowrap">ITEM DESCRIPTION</th>
+                      <th className="p-3 text-center border-r border-gray-300 select-text whitespace-nowrap">NOS</th>
                       <th className="p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
-                      <th className="p-3 text-center border-r border-gray-300 w-48 select-none">ADMIN NOTE</th>
-                      <th className="p-3 text-center w-20 select-none">PDF</th>
-                      {userRole === 'master' && <th className="p-3 text-center w-16 select-none bg-red-100 text-red-800">DEL</th>}
+                      <th className="p-3 text-center border-r border-gray-300 w-48 select-none whitespace-nowrap">ADMIN NOTE</th>
+                      <th className="p-3 text-center w-20 select-none whitespace-nowrap">PDF</th>
+                      {userRole === 'master' && <th className="p-3 text-center w-16 select-none bg-red-100 text-red-800 whitespace-nowrap">DEL</th>}
                     </tr>
                   </thead>
                   <tbody>
