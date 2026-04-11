@@ -56,6 +56,14 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
 
+  // OFFLINE QUEUE STATE
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [offlineQueue, setOfflineQueue] = useState(() => {
+    const saved = localStorage.getItem('god_offline_queue');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [isSyncing, setIsSyncing] = useState(false);
+
   const [view, setView] = useState(''); 
   const [masterItems, setMasterItems] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -112,6 +120,26 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
+  // NETWORK LISTENERS
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // QUEUE SYNC LISTENER
+  useEffect(() => {
+    localStorage.setItem('god_offline_queue', JSON.stringify(offlineQueue));
+    if (isOnline && offlineQueue.length > 0) {
+      syncOfflineQueue();
+    }
+  }, [offlineQueue, isOnline]);
+
   useEffect(() => {
     document.title = "GOD eChallan";
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -148,7 +176,9 @@ export default function App() {
   }
 
   async function handleLogin(e) {
-    e.preventDefault(); setLoginError(''); setIsLoggingIn(true); 
+    e.preventDefault(); 
+    if (!isOnline) { setLoginError("Internet required for initial login."); return; }
+    setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
@@ -163,6 +193,7 @@ export default function App() {
   }
 
   const fetchAvailableYears = async () => {
+    if(!isOnline) return;
     const currentYear = new Date().getFullYear();
     const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
     if (data && data.length > 0) {
@@ -176,15 +207,20 @@ export default function App() {
   };
 
   const fetchMasterItems = async () => {
+    if(!isOnline) return;
     const { data } = await supabase.from('master_items').select('*');
     if (data && data.length > 0) {
       setMasterItems(data); setUploadStatus(`${data.length} SKUs AVAILABLE`);
+      localStorage.setItem('god_cached_items', JSON.stringify(data));
     } else {
-      setMasterItems([]); setUploadStatus('WAITING UPLOAD');
+      const cached = localStorage.getItem('god_cached_items');
+      if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
+      else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
     }
   };
 
   const fetchPendingData = async () => {
+    if(!isOnline) return;
     const promises = [
       supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true }),
       supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false }),
@@ -198,9 +234,8 @@ export default function App() {
     if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
-  // PAGINATED LEDGER FETCH
   const fetchLedgerData = async () => {
-    if (!session) return;
+    if (!session || !isOnline) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
     const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
 
@@ -216,8 +251,8 @@ export default function App() {
     if (count !== null) setTotalLedgerCount(count);
   };
 
-  // LIVE INVENTORY FETCH
   const fetchLiveStock = async () => {
+    if(!isOnline) return;
     setIsFetchingStock(true);
     const { data } = await supabase.from('transactions')
       .select('item_desc, disp_qty, req_qty, status, unit')
@@ -230,7 +265,7 @@ export default function App() {
           let q = parseInt(row.disp_qty || row.req_qty) || 0;
           if (!inventory[desc]) inventory[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
           if (row.status === 'RETURN_ACCEPTED') inventory[desc].qty -= q;
-          else inventory[desc].qty += q; // Applies to ACCEPTED, DISPATCHED, and STOCK_ADJUSTMENT (which handles its own negative values)
+          else inventory[desc].qty += q; 
       });
       const stockArr = Object.entries(inventory).filter(([_, v]) => v.qty !== 0).map(([k, v]) => ({ desc: k, ...v })).sort((a,b) => a.category.localeCompare(b.category) || a.desc.localeCompare(b.desc));
       setLiveStock(stockArr);
@@ -273,7 +308,7 @@ export default function App() {
 
   // --- REALTIME NOTIFICATIONS ---
   useEffect(() => {
-    if (!session || !userRole) return;
+    if (!session || !userRole || !isOnline) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
             if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'master' || userRole === 'depot')) {
@@ -296,9 +331,53 @@ export default function App() {
           }
         }).subscribe();
     return () => supabase.removeChannel(channel);
-  }, [session, userRole]);
+  }, [session, userRole, isOnline]);
 
+  // --- QUEUE SYNC ENGINE ---
+  const syncOfflineQueue = async () => {
+    if (!isOnline || offlineQueue.length === 0 || isSyncing) return;
+    setIsSyncing(true);
+    let remaining = [...offlineQueue];
+    let syncedCount = 0;
+    
+    for (const item of offlineQueue) {
+      const { error } = await supabase.from('transactions').insert(item.payload);
+      if (!error) {
+        remaining = remaining.filter(q => q.id !== item.id);
+        syncedCount++;
+      }
+    }
+    
+    setOfflineQueue(remaining);
+    setIsSyncing(false);
+    if (syncedCount > 0) {
+      triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`);
+      refreshAllData();
+      if(view === 'stock') fetchLiveStock();
+    }
+  };
+
+  const executeTransaction = async (txPayload, alertTitle, alertMsg, onSuccess) => {
+    if (isOnline) {
+      const { error } = await supabase.from('transactions').insert(txPayload);
+      if (error) {
+         setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
+         triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`);
+      } else {
+         triggerSystemAlert(alertTitle, alertMsg);
+         refreshAllData();
+         if(view === 'stock') fetchLiveStock();
+      }
+    } else {
+      setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
+      triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`);
+    }
+    if (onSuccess) onSuccess();
+  };
+
+  // --- ACTIONS ---
   const saveAdminNote = async (keyField, keyValue) => {
+    if(!isOnline) { alert("Internet required to save notes."); return; }
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
       if (error) throw error;
@@ -308,6 +387,7 @@ export default function App() {
   };
 
   const deleteLedgerGroup = async (keyField, keyValue) => {
+    if(!isOnline) { alert("Internet required to delete records."); return; }
     if (window.confirm(`MASTER OVERRIDE: Permanently delete all records for ${keyValue}? This cannot be undone.`)) {
       const { error } = await supabase.from('transactions').delete().eq(keyField, keyValue);
       if (error) alert(`Deletion Failed: ${error.message}`);
@@ -317,6 +397,7 @@ export default function App() {
 
   const submitMasterAdjustment = async (e) => {
     e.preventDefault();
+    if(!isOnline) { alert("Internet required to adjust stock."); return; }
     if (!adjustItem || !adjustQty) return;
     const numQty = parseInt(adjustQty);
     if (isNaN(numQty) || numQty === 0) return;
@@ -355,9 +436,15 @@ export default function App() {
   const getNextSequence = async (type) => {
     const prefix = type === 'PO' ? 'PO2627' : type === 'RT' ? 'RT2627' : type === 'RR' ? 'RR2627' : 'CN2627';
     const column = type === 'PO' || type === 'RR' ? 'group_id' : 'challan_no';
-    const { data } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
-    if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(data[0][column].replace(prefix, '')) + 1).padStart(3, '0')}`;
-    return `${prefix}001`;
+    try {
+      if (!isOnline) throw new Error("Offline");
+      const { data, error } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
+      if (error) throw error;
+      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(data[0][column].replace(prefix, '')) + 1).padStart(3, '0')}`;
+      return `${prefix}001`;
+    } catch (e) {
+      return `${prefix}-OFF-${Math.floor(Date.now() / 1000)}`;
+    }
   };
 
   const getCategory = (desc) => {
@@ -684,18 +771,18 @@ export default function App() {
   const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index].req_qty = val; setRetailCart(updated); };
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
-  const submitRetailAction = async () => {
+  const submitRetailAction = async (e) => {
+    if (e) e.preventDefault();
     if (retailCart.length === 0) return; const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
     const tx = retailCart.map(item => ({ 
       group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
       unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
       challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
     }));
-    const { error } = await supabase.from('transactions').insert(tx);
-    if (error) { triggerSystemAlert("Submission Error", error.message); } else { 
-      triggerSystemAlert(`${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`); 
-      setRetailCart([]); setRetailReturnNote(''); refreshAllData();
-    }
+    
+    executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
+      setRetailCart([]); setRetailReturnNote('');
+    });
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
@@ -711,16 +798,21 @@ export default function App() {
     if (depotMode === 'DISPATCH') {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-      const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { printPDF(challanNo, depotCart); setDepotCart([]); fetchPendingData(); }
+      
+      executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
+        printPDF(challanNo, depotCart);
+        setDepotCart([]); 
+      });
     } else {
       const groupId = await getNextSequence('RR');
       const tx = depotCart.map(item => ({ 
         group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
         unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
       }));
-      const { error } = await supabase.from('transactions').insert(tx);
-      if (!error) { triggerSystemAlert("Return Request Submitted", `Group ID: ${groupId}`); setDepotCart([]); setDepotReturnNote(''); fetchPendingData(); }
+      
+      executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
+        setDepotCart([]); setDepotReturnNote('');
+      });
     }
   };
 
@@ -731,6 +823,7 @@ export default function App() {
   const toggleVerifyCheck = (index) => setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
 
   const acceptDelivery = async () => {
+    if (!isOnline) { alert("You must be online to verify and accept deliveries."); return; }
     if (!verifyModal) return; const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     const { error } = await supabase.from('transactions').update({ status: newStatus }).eq('challan_no', verifyModal.challanNo);
     if (!error) { setVerifyModal(null); refreshAllData(); }
@@ -740,6 +833,7 @@ export default function App() {
   const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
+    if (!isOnline) { alert("You must be online to process and dispatch Purchase Orders."); return; }
     if (!editPOModal) return; const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
     for (const item of editPOModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
@@ -756,6 +850,7 @@ export default function App() {
   const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
+    if (!isOnline) { alert("You must be online to process return requests."); return; }
     if (!processReturnModal) return; const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
     for (const item of processReturnModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
@@ -772,11 +867,12 @@ export default function App() {
   if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold select-none">LOADING SYSTEM...</div>;
   if (!session) return (
     <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans select-none">
-      <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full">
-        <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2">GOD LOGIN</h2>
+      <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full relative">
+        {!isOnline && <div className="absolute top-0 left-0 w-full bg-red-600 text-white text-center text-[10px] font-black py-0.5">OFFLINE MODE</div>}
+        <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2 mt-2">GOD LOGIN</h2>
         <form onSubmit={handleLogin} className="space-y-4">
           <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text" required />
-          <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
+          <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all disabled:opacity-50">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
           {loginError && <p className="text-red-600 font-bold text-center text-sm uppercase">{loginError}</p>}
         </form>
       </div>
@@ -786,8 +882,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[13px]">
-          <span className="tracking-widest">Gujarat Oil Depot</span>
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
+          <div className="flex items-center gap-2">
+            <span className="tracking-widest">Gujarat Oil Depot</span>
+            {!isOnline && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC PENDING (${offlineQueue.length})`}</span>}
+          </div>
+          
           <div className="flex gap-2 items-center">
             {userRole && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
@@ -797,7 +898,9 @@ export default function App() {
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
                   <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs font-bold ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
+                {(userRole === 'admin' || userRole === 'master') && (
+                  <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
+                )}
                 <button onClick={() => { setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
@@ -807,6 +910,7 @@ export default function App() {
       </nav>
 
       <main className="container mx-auto p-4">
+        {/* MODALS */}
         {verifyModal && (
           <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -909,6 +1013,7 @@ export default function App() {
           </div>
         )}
 
+        {/* VIEWS */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -1126,7 +1231,6 @@ export default function App() {
 
         {view === 'depot' && (
           <div className="flex flex-col md:flex-row gap-4 items-start">
-            {/* Updates Section - Left on desktop, below on mobile */}
             <div className="w-full md:w-1/2 space-y-4 order-2 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
@@ -1180,7 +1284,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Data Entry - Right on desktop, top on mobile */}
             <div className="w-full md:w-1/2 flex flex-col gap-4 order-1 md:order-2">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
@@ -1189,7 +1292,7 @@ export default function App() {
                 </div>
               </div>
 
-              <form onSubmit={addToDepotCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
+              <form onSubmit={submitDepotAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
                 <div className="flex flex-col space-y-4">
                   <div className="relative">
                     <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
@@ -1216,7 +1319,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 bg-gray-800 hover:bg-black border-black">
                     + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
                   </button>
                 </div>
@@ -1256,7 +1359,6 @@ export default function App() {
 
         {view === 'retail' && (
           <div className="flex flex-col md:flex-row gap-4 items-start">
-            {/* Updates Section - Left on desktop, below on mobile */}
             <div className="w-full md:w-1/2 space-y-4 order-2 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
@@ -1310,7 +1412,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Data Entry - Right on desktop, top on mobile */}
             <div className="w-full md:w-1/2 flex flex-col gap-4 order-1 md:order-2">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
@@ -1319,7 +1420,7 @@ export default function App() {
                 </div>
               </div>
 
-              <form onSubmit={addToRetailCart} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
+              <form onSubmit={submitRetailAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
                 <div className="flex flex-col space-y-4">
                   <div className="relative">
                     <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
@@ -1346,7 +1447,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 bg-gray-800 hover:bg-black border-black`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
