@@ -62,6 +62,12 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
+  // PAGINATION & STOCK STATE
+  const [ledgerLimit, setLedgerLimit] = useState(50);
+  const [totalLedgerCount, setTotalLedgerCount] = useState(0);
+  const [liveStock, setLiveStock] = useState([]);
+  const [isFetchingStock, setIsFetchingStock] = useState(false);
+  
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
@@ -119,11 +125,13 @@ export default function App() {
     const { data } = await supabase.from('users').select('role').eq('id', userId).single();
     if (data) {
       const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
-      setUserRole(currentRole === 'master' ? 'admin' : currentRole);
-      
+      setUserRole(currentRole);
       fetchAvailableYears();
 
-      if (currentRole === 'admin' || currentRole === 'master') { setView('ledger'); setIsAdminAuth(true); } 
+      if (currentRole === 'master' || currentRole === 'admin') { 
+        setView('ledger'); 
+        setIsAdminAuth(true); 
+      } 
       else if (currentRole === 'retail') { setView('retail'); }
       else if (currentRole === 'depot') { setView('depot'); }
       else { setView('unassigned'); }
@@ -182,19 +190,44 @@ export default function App() {
     if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
   };
 
+  // PAGINATED LEDGER FETCH
   const fetchLedgerData = async () => {
     if (!session) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
     const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
 
-    const { data } = await supabase.from('transactions')
-      .select('*')
+    const { data, count } = await supabase.from('transactions')
+      .select('*', { count: 'exact' })
       .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED'])
       .gte('timestamp', startDate)
       .lte('timestamp', endDate)
-      .order('timestamp', { ascending: false });
+      .order('timestamp', { ascending: false })
+      .limit(ledgerLimit);
 
     if (data) setLedgerData(data);
+    if (count !== null) setTotalLedgerCount(count);
+  };
+
+  // LIVE INVENTORY FETCH
+  const fetchLiveStock = async () => {
+    setIsFetchingStock(true);
+    const { data } = await supabase.from('transactions')
+      .select('item_desc, disp_qty, req_qty, status, unit')
+      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED']);
+
+    if (data) {
+      const inventory = {};
+      data.forEach(row => {
+          let desc = String(row.item_desc).trim().toUpperCase();
+          let q = parseInt(row.disp_qty || row.req_qty) || 0;
+          if (!inventory[desc]) inventory[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
+          if (row.status === 'RETURN_ACCEPTED') inventory[desc].qty -= q;
+          else inventory[desc].qty += q;
+      });
+      const stockArr = Object.entries(inventory).filter(([_, v]) => v.qty !== 0).map(([k, v]) => ({ desc: k, ...v })).sort((a,b) => a.category.localeCompare(b.category) || a.desc.localeCompare(b.desc));
+      setLiveStock(stockArr);
+    }
+    setIsFetchingStock(false);
   };
 
   const refreshAllData = async () => {
@@ -202,14 +235,14 @@ export default function App() {
     await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]);
   };
 
-  useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear]);
+  useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
 
   // --- PERSISTENT BADGE & TITLE HIGHLIGHTING ---
   useEffect(() => {
     let actionableCount = 0;
     if (userRole === 'depot') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length;
     else if (userRole === 'retail') actionableCount = Object.keys(incomingDeliveries).length;
-    else if (userRole === 'admin') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
+    else if (userRole === 'admin' || userRole === 'master') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
 
     if (navigator.setAppBadge) {
       if (actionableCount > 0) navigator.setAppBadge(actionableCount).catch(() => {});
@@ -227,9 +260,7 @@ export default function App() {
       if (!document.title.includes("🔔")) document.title = "GOD eChallan";
     }
 
-    return () => {
-      if (persistentInterval) clearInterval(persistentInterval);
-    };
+    return () => { if (persistentInterval) clearInterval(persistentInterval); };
   }, [pendingPOs, pendingDepotReturns, incomingDeliveries, pendingReturns, userRole]);
 
   // --- REALTIME NOTIFICATIONS ---
@@ -237,10 +268,10 @@ export default function App() {
     if (!session || !userRole) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
-            if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'depot')) {
+            if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'master' || userRole === 'depot')) {
                 triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`); refreshAllData();
             }
-            if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'retail')) {
+            if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'master' || userRole === 'retail')) {
                 triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
             }
           }
@@ -266,6 +297,14 @@ export default function App() {
       await fetchLedgerData();
       setOpenNoteId(null);
     } catch (error) { alert(`Failed to save note: ${error.message}`); }
+  };
+
+  const deleteLedgerGroup = async (keyField, keyValue) => {
+    if (window.confirm(`MASTER OVERRIDE: Permanently delete all records for ${keyValue}? This cannot be undone.`)) {
+      const { error } = await supabase.from('transactions').delete().eq(keyField, keyValue);
+      if (error) alert(`Deletion Failed: ${error.message}`);
+      else refreshAllData();
+    }
   };
 
   const formatDate = (dateInput) => {
@@ -695,18 +734,21 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[13px]">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
           <span className="tracking-widest">Gujarat Oil Depot</span>
           <div className="flex gap-2 items-center">
             {userRole && (
               <div className="bg-gray-700 p-1 flex gap-1 rounded">
-                {(userRole === 'admin' || userRole === 'depot') && (
+                {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
                   <button onClick={() => setView('depot')} className={`px-3 py-1.5 text-xs font-bold ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
-                {(userRole === 'admin' || userRole === 'retail') && (
+                {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
                   <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs font-bold ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => setView('ledger')} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                {(userRole === 'admin' || userRole === 'master') && (
+                  <button onClick={() => { setView('stock'); fetchLiveStock(); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'stock' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>STOCK</button>
+                )}
+                <button onClick={() => { setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
             <button onClick={() => supabase.auth.signOut()} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700">LOGOUT</button>
@@ -716,65 +758,65 @@ export default function App() {
 
       <main className="container mx-auto p-4">
         {verifyModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase">VERIFY GOODS: {verifyModal.challanNo}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
                 {verifyModal.items.map((item, idx) => (
                   <label key={idx} className={`flex items-center space-x-3 p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-green-100 border-green-600' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
                     <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-black select-text" />
-                    <span className="flex-1 text-[13px] font-bold text-gray-800">{item.item_desc}</span>
-                    <span className="text-[13px] font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                    <span className="flex-1 text-sm font-bold text-gray-800">{item.item_desc}</span>
+                    <span className="text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                   </label>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-green-700 text-white py-3 text-[13px] font-bold hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
+                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-green-700 text-white py-3 text-sm font-bold hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
               </div>
             </div>
           </div>
         )}
 
         {editPOModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-[15px]">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
                 <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-[13px] font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
+                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-sm font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
               </div>
             </div>
           </div>
         )}
 
         {processReturnModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-[15px] font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
+              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
               <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
                 <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-[13px] font-bold hover:bg-red-900">GENERATE RETURN</button>
+                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-sm font-bold hover:bg-red-900">GENERATE RETURN</button>
               </div>
             </div>
           </div>
@@ -784,8 +826,45 @@ export default function App() {
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
               <h2 className="text-xl font-black text-red-800 mb-2">NO TERMINAL ASSIGNED</h2>
-              <p className="font-bold text-gray-800 text-[13px]">Your account does not have a valid role (Depot, Retail, or Admin) assigned in the database.</p>
+              <p className="font-bold text-gray-800 text-sm">Your account does not have a valid role assigned in the database.</p>
             </div>
+          </div>
+        )}
+
+        {view === 'stock' && (
+          <div className="w-full bg-white border-2 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex justify-between items-center border-b-2 border-black pb-3 mb-4">
+               <h2 className="text-xl font-black uppercase tracking-wider">LIVE INVENTORY DASHBOARD</h2>
+               <button onClick={fetchLiveStock} className="bg-gray-200 border border-black px-3 py-1 font-bold text-xs uppercase shadow-sm hover:bg-gray-300">↻ REFRESH</button>
+            </div>
+            {isFetchingStock ? (
+               <p className="text-center py-10 font-bold text-gray-500 uppercase animate-pulse">Calculating Live Stock...</p>
+            ) : (
+               <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+                 <table className="w-full text-left border-collapse text-sm">
+                   <thead className="bg-yellow-100 border-b-2 border-black font-bold uppercase sticky top-0 shadow-sm text-[13px] text-yellow-900">
+                     <tr>
+                       <th className="p-3 border-r border-black w-32">CATEGORY</th>
+                       <th className="p-3 border-r border-black">ITEM DESCRIPTION</th>
+                       <th className="p-3 text-center border-r border-black w-40">NET STOCK (NOS)</th>
+                       <th className="p-3 text-center w-24">UNIT</th>
+                     </tr>
+                   </thead>
+                   <tbody>
+                     {liveStock.length === 0 ? (
+                        <tr><td colSpan="4" className="text-center py-6 font-bold text-gray-400">NO STOCK FOUND</td></tr>
+                     ) : liveStock.map((item, idx) => (
+                       <tr key={idx} className="border-b border-gray-300 hover:bg-yellow-50 font-bold text-gray-800 select-text">
+                         <td className="p-3 border-r border-gray-300">{item.category}</td>
+                         <td className="p-3 border-r border-gray-300 uppercase">{item.desc}</td>
+                         <td className="p-3 border-r border-gray-300 text-center text-blue-800 text-base">{item.qty}</td>
+                         <td className="p-3 text-center text-xs text-gray-500">{item.unit}</td>
+                       </tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
+            )}
           </div>
         )}
 
@@ -794,7 +873,7 @@ export default function App() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
               <div className="flex items-center gap-4">
                 <span className="font-black text-[13px] uppercase">{uploadStatus}</span>
-                {userRole === 'admin' && (
+                {(userRole === 'admin' || userRole === 'master') && (
                   <label className="bg-gray-200 border border-black hover:bg-gray-300 px-4 py-2 rounded-sm text-[13px] font-bold cursor-pointer">
                     UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
                   </label>
@@ -809,7 +888,7 @@ export default function App() {
                 <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
-                {userRole === 'admin' && (
+                {(userRole === 'admin' || userRole === 'master') && (
                   <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-5 py-2 font-bold text-[13px] ml-2">EXPORT EXCEL</button>
                 )}
               </div>
@@ -827,6 +906,7 @@ export default function App() {
                       <th className="p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
                       <th className="p-3 text-center border-r border-gray-300 w-48 select-none">ADMIN NOTE</th>
                       <th className="p-3 text-center w-20 select-none">PDF</th>
+                      {userRole === 'master' && <th className="p-3 text-center w-16 select-none bg-red-100 text-red-800">DEL</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -836,7 +916,7 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
-                      <tr><td colSpan="7" className="p-8 text-center text-gray-500 font-bold uppercase text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
+                      <tr><td colSpan={userRole === 'master' ? "8" : "7"} className="p-8 text-center text-gray-500 font-bold uppercase text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
                       const key = row.challan_no || row.group_id; 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
@@ -868,7 +948,7 @@ export default function App() {
                         <td className="p-3 border-r border-gray-200 align-top select-none">
                           {group.status !== 'RETURN_ACCEPTED' ? (
                             <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
-                              {userRole === 'admin' ? (
+                              {(userRole === 'admin' || userRole === 'master') ? (
                                 openNoteId === group.keyValue ? (
                                   <div className="flex flex-col gap-1.5 w-full mt-1">
                                     <textarea
@@ -931,11 +1011,21 @@ export default function App() {
                             <span className="text-gray-300">-</span>
                           )}
                         </td>
+                        {userRole === 'master' && (
+                          <td className="p-3 text-center vertical-middle select-none border-l border-red-200">
+                             <button onClick={() => deleteLedgerGroup(group.keyField, group.keyValue)} className="text-xl hover:scale-110 active:scale-95 transition-transform" title="Permanently Delete Group">🗑️</button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {ledgerData.length >= ledgerLimit && (
+                 <div className="bg-gray-100 border-t-2 border-black p-2 flex justify-center">
+                    <button onClick={() => setLedgerLimit(prev => prev + 50)} className="bg-black text-white px-6 py-2 text-xs font-bold uppercase hover:bg-gray-800 transition-colors">Load Older Records</button>
+                 </div>
+              )}
             </div>
           </div>
         )}
@@ -985,7 +1075,7 @@ export default function App() {
                         <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
                           <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
                             <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
                           <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
@@ -1115,7 +1205,7 @@ export default function App() {
                         <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
                           <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
                             <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[11px] font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
                           </div>
                           <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
                         </div>
@@ -1162,7 +1252,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="submit" className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
+                  <button type="submit" className={`w-full text-white font-bold text-sm py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 ${retailMode === 'RETURN' ? 'bg-red-800 hover:bg-red-900 border-black' : 'bg-gray-800 hover:bg-black border-black'}`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>

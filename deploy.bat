@@ -21,6 +21,6 @@ call npx supabase functions deploy send-monthly-ledger --no-verify-jwt
 
 echo.
 echo ===================================================
-echo ✅ DEPLOYMENT 100%% COMPLETE!
+echo DEPLOYMENT 100%% COMPLETE!
 echo ===================================================
 pause
