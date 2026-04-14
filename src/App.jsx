@@ -965,7 +965,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <div className="relative flex items-center">
               <span className="tracking-widest">Gujarat Oil Depot</span>
-              <a href="YOUR_GOOGLE_WEB_APP_URL_HERE" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
+              <a href="https://script.google.com/macros/s/AKfycbx2iDkE7rw_qq9vAG7d7ezQ8Ci7F8TLdD9S-TS5c8wDYaeUTkixccjXaD0oSp0Th1t4cQ/exec" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
               {actionableCount > 0 && (
                 <span className="absolute -top-1 -right-3 flex h-3 w-3">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
