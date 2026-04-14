@@ -1,27 +1,37 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
-// --- NOTIFICATION HELPERS ---
+// --- AGGRESSIVE AUDIO UNLOCKER ---
+let globalAudioCtx = null;
+const initAudio = () => {
+  if (!globalAudioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) globalAudioCtx = new AudioCtx();
+  }
+  if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+    globalAudioCtx.resume();
+  }
+};
+
 const playChime = () => {
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gainNode = ctx.createGain();
+    if (!globalAudioCtx) return;
+    const osc = globalAudioCtx.createOscillator();
+    const gainNode = globalAudioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime); 
-    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3); 
-    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.5);
+    osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
+    osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.3); 
+    gainNode.gain.setValueAtTime(0.3, globalAudioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.5);
     osc.connect(gainNode);
-    gainNode.connect(ctx.destination);
+    gainNode.connect(globalAudioCtx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.5);
-  } catch (e) { console.warn("Audio API not supported"); }
+    osc.stop(globalAudioCtx.currentTime + 0.5);
+  } catch (e) { console.warn("Audio API failed"); }
 };
 
 let titleInterval;
@@ -43,9 +53,19 @@ const blinkTitle = (msg) => {
 const triggerSystemAlert = (title, body) => {
   playChime();
   blinkTitle(`🔔 ${title}`);
+  
   if ("Notification" in window && Notification.permission === "granted") {
-    new Notification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+    if (document.visibilityState !== 'visible') {
+      new Notification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+    }
   }
+};
+
+// --- HYPER-STRICT DATA CLEANERS ---
+const cleanDesc = (d) => String(d).replace(/\s+/g, ' ').trim().toUpperCase();
+const normalizeString = (str) => {
+    if (!str) return '';
+    return String(str).toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 };
 
 export default function App() {
@@ -56,7 +76,6 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // OFFLINE QUEUE STATE
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [offlineQueue, setOfflineQueue] = useState(() => {
     const saved = localStorage.getItem('god_offline_queue');
@@ -70,13 +89,12 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
   
-  // PAGINATION STATE
   const [ledgerLimit, setLedgerLimit] = useState(50);
-  const [totalLedgerCount, setTotalLedgerCount] = useState(0);
   
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
+  const [availableMonths, setAvailableMonths] = useState([new Date().getMonth()]);
   
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
@@ -85,16 +103,16 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [qty, setQty] = useState('');
   const [selectedItem, setSelectedItem] = useState(null);
-  const [selectedUnit, setSelectedUnit] = useState('CANS'); 
+  const [selectedUnit, setSelectedUnit] = useState('NOS'); 
   const [depotCart, setDepotCart] = useState([]); 
   const [depotReturnNote, setDepotReturnNote] = useState(''); 
-  const [pendingDepotReturns, setPendingDepotReturns] = useState({});
+  const [isDepotDropdownOpen, setIsDepotDropdownOpen] = useState(false);
 
   const [retailMode, setRetailMode] = useState('PO'); 
   const [retailSearch, setRetailSearch] = useState('');
   const [retailQty, setRetailQty] = useState('');
   const [retailSelectedItem, setRetailSelectedItem] = useState(null);
-  const [retailSelectedUnit, setRetailSelectedUnit] = useState('CANS'); 
+  const [retailSelectedUnit, setRetailSelectedUnit] = useState('NOS'); 
   const [retailReturnNote, setRetailReturnNote] = useState(''); 
   const [isRetailDropdownOpen, setIsRetailDropdownOpen] = useState(false);
   const [retailCart, setRetailCart] = useState([]); 
@@ -102,71 +120,128 @@ export default function App() {
   const [pendingPOs, setPendingPOs] = useState({}); 
   const [incomingDeliveries, setIncomingDeliveries] = useState({});
   const [pendingReturns, setPendingReturns] = useState({});
+  const [pendingDepotReturns, setPendingDepotReturns] = useState({});
   const [isAdminAuth, setIsAdminAuth] = useState(false);
 
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
+  const [actionableCount, setActionableCount] = useState(0);
+
+  // Focus Refs
+  const depotSearchRef = useRef(null);
+  const depotQtyRef = useRef(null);
+  const retailSearchRef = useRef(null);
+  const retailQtyRef = useRef(null);
+
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // NETWORK LISTENERS
+  // NETWORK & AUDIO LISTENERS
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    
+    window.addEventListener('click', initAudio, { once: true });
+    window.addEventListener('touchstart', initAudio, { once: true });
+    window.addEventListener('keydown', initAudio, { once: true });
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  // QUEUE SYNC LISTENER
+  // QUEUE SYNC
   useEffect(() => {
     localStorage.setItem('god_offline_queue', JSON.stringify(offlineQueue));
-    if (isOnline && offlineQueue.length > 0) {
-      syncOfflineQueue();
-    }
+    if (isOnline && offlineQueue.length > 0) syncOfflineQueue();
   }, [offlineQueue, isOnline]);
 
+  // SMART DYNAMIC MONTH FILTER
+  useEffect(() => {
+    if (isOnline && session) {
+      const fetchMonths = async () => {
+        const startDate = new Date(ledgerYear, 0, 1).toISOString();
+        const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
+        const { data } = await supabase.from('transactions').select('timestamp').gte('timestamp', startDate).lte('timestamp', endDate);
+        if (data && data.length > 0) {
+            const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
+            setAvailableMonths(months);
+            if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
+        } else {
+            setAvailableMonths([new Date().getMonth()]);
+        }
+      };
+      fetchMonths();
+    }
+  }, [ledgerYear, isOnline, session]);
+
+  // SMART SESSION RESTORATION
   useEffect(() => {
     document.title = "GOD eChallan";
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchRole(session.user.id);
-      else setLoadingAuth(false);
-    });
+    const initializeAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (session) {
+          setSession(session);
+          await fetchRole(session.user.id);
+        } else {
+          setLoadingAuth(false);
+        }
+      } catch (err) {
+        console.error("Auth Init Error:", err);
+        setLoadingAuth(false); 
+      }
+    };
+    
+    initializeAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) fetchRole(session.user.id);
-      else { setUserRole(null); setView(''); setIsAdminAuth(false); setLoadingAuth(false); }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setSession(null); setUserRole(null); setView(''); setLoadingAuth(false);
+      } else if (session) {
+        setSession(session);
+        fetchRole(session.user.id);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  async function fetchRole(userId) {
-    const { data } = await supabase.from('users').select('role').eq('id', userId).single();
-    if (data) {
-      const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
-      setUserRole(currentRole);
-      fetchAvailableYears();
+  // AUTO-FOCUS ENGINE
+  useEffect(() => {
+    if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100);
+    if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100);
+  }, [view, depotMode, retailMode]);
 
-      if (currentRole === 'master' || currentRole === 'admin') { 
-        setView('ledger'); 
-        setIsAdminAuth(true); 
-      } 
-      else if (currentRole === 'retail') { setView('retail'); }
-      else if (currentRole === 'depot') { setView('depot'); }
-      else { setView('unassigned'); }
+  async function fetchRole(userId) {
+    try {
+      const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
+      if (error) throw error;
+      if (data) {
+        const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
+        setUserRole(currentRole);
+        fetchAvailableYears();
+
+        if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
+        else if (currentRole === 'retail') setView('retail'); 
+        else if (currentRole === 'depot') setView('depot'); 
+        else setView('unassigned'); 
+      }
+    } catch (err) {
+      console.error("Role Fetch Error:", err);
+    } finally {
+      setLoadingAuth(false); 
     }
-    setLoadingAuth(false);
   }
 
   async function handleLogin(e) {
     e.preventDefault(); 
+    initAudio(); 
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
@@ -175,11 +250,8 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      // ONLY ASK ONCE PER DEVICE
       if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
-        Notification.requestPermission().then(() => {
-          localStorage.setItem("god_notif_asked", "true");
-        });
+        Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
       }
     }
     setIsLoggingIn(false);
@@ -187,28 +259,35 @@ export default function App() {
 
   const fetchAvailableYears = async () => {
     if(!isOnline) return;
-    const currentYear = new Date().getFullYear();
-    const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
-    if (data && data.length > 0) {
-      const firstYear = new Date(data[0].timestamp).getFullYear();
-      const years = [];
-      for (let i = firstYear; i <= currentYear; i++) years.push(i);
-      setAvailableYears(years.reverse());
-    } else {
-      setAvailableYears([currentYear]);
-    }
+    try {
+      const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
+      const currentYear = new Date().getFullYear();
+      if (data && data.length > 0) {
+        const firstYear = new Date(data[0].timestamp).getFullYear();
+        const years = []; for (let i = firstYear; i <= currentYear; i++) years.push(i);
+        setAvailableYears(years.reverse());
+      } else {
+        setAvailableYears([currentYear]);
+      }
+    } catch(e) {}
   };
 
   const fetchMasterItems = async () => {
     if(!isOnline) return;
-    const { data } = await supabase.from('master_items').select('*');
-    if (data && data.length > 0) {
-      setMasterItems(data); setUploadStatus(`${data.length} SKUs AVAILABLE`);
-      localStorage.setItem('god_cached_items', JSON.stringify(data));
-    } else {
+    try {
+      const { data, error } = await supabase.from('master_items').select('*');
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setMasterItems(data); setUploadStatus(`${data.length} SKUs AVAILABLE`);
+        localStorage.setItem('god_cached_items', JSON.stringify(data));
+      } else {
+        const cached = localStorage.getItem('god_cached_items');
+        if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
+        else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
+      }
+    } catch (err) {
       const cached = localStorage.getItem('god_cached_items');
       if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
-      else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
     }
   };
 
@@ -231,17 +310,8 @@ export default function App() {
     if (!session || !isOnline) return;
     const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
     const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
-
-    const { data, count } = await supabase.from('transactions')
-      .select('*', { count: 'exact' })
-      .in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'STOCK_ADJUSTMENT'])
-      .gte('timestamp', startDate)
-      .lte('timestamp', endDate)
-      .order('timestamp', { ascending: false })
-      .limit(ledgerLimit);
-
+    const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
     if (data) setLedgerData(data);
-    if (count !== null) setTotalLedgerCount(count);
   };
 
   const refreshAllData = async () => {
@@ -251,80 +321,44 @@ export default function App() {
 
   useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
 
-  // --- PERSISTENT BADGE & TITLE HIGHLIGHTING ---
   useEffect(() => {
-    let actionableCount = 0;
-    if (userRole === 'depot') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length;
-    else if (userRole === 'retail') actionableCount = Object.keys(incomingDeliveries).length;
-    else if (userRole === 'admin' || userRole === 'master') actionableCount = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
-
+    let count = 0;
+    if (userRole === 'depot') count = Object.keys(pendingPOs).length + Object.keys(pendingReturns).length;
+    else if (userRole === 'retail') count = Object.keys(incomingDeliveries).length + Object.keys(pendingDepotReturns).length;
+    else if (userRole === 'admin' || userRole === 'master') count = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
+    
+    setActionableCount(count);
     if (navigator.setAppBadge) {
-      if (actionableCount > 0) navigator.setAppBadge(actionableCount).catch(() => {});
+      if (count > 0) navigator.setAppBadge(count).catch(() => {});
       else navigator.clearAppBadge().catch(() => {});
     }
-
-    let persistentInterval;
-    if (actionableCount > 0) {
-      persistentInterval = setInterval(() => {
-        if (!document.title.includes("🔔")) {
-           document.title = document.title === "GOD eChallan" ? `(${actionableCount}) Action Required` : "GOD eChallan";
-        }
-      }, 1500);
-    } else {
-      if (!document.title.includes("🔔")) document.title = "GOD eChallan";
-    }
-
-    return () => { if (persistentInterval) clearInterval(persistentInterval); };
   }, [pendingPOs, pendingDepotReturns, incomingDeliveries, pendingReturns, userRole]);
 
-  // --- REALTIME NOTIFICATIONS ---
   useEffect(() => {
     if (!session || !userRole || !isOnline) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
           if (payload.eventType === 'INSERT') {
-            if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'master' || userRole === 'depot')) {
-                triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`); refreshAllData();
-            }
-            if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'master' || userRole === 'retail')) {
-                triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`); refreshAllData();
-            }
+            if (payload.new.status === 'PO_PLACED' && (userRole === 'admin' || userRole === 'master' || userRole === 'depot')) { triggerSystemAlert("New Order", `Order ${payload.new.group_id} has been received.`); refreshAllData(); }
+            if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'master' || userRole === 'retail')) { triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`); refreshAllData(); }
           }
           if (payload.eventType === 'UPDATE') {
-             if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') {
-                 triggerSystemAlert("Goods Dispatched", `Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData();
-             }
-             if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') {
-                 triggerSystemAlert("Incoming Return", `Incoming Return: ${payload.new.challan_no}`); refreshAllData();
-             }
+             if (payload.old.status === 'PO_PLACED' && payload.new.status === 'DISPATCHED' && userRole === 'retail') { triggerSystemAlert("Goods Dispatched", `Goods dispatched under Challan ${payload.new.challan_no}`); refreshAllData(); }
+             if (payload.old.status === 'RETURN_REQUESTED' && payload.new.status === 'RETURN_INITIATED' && userRole === 'depot') { triggerSystemAlert("Incoming Return", `Incoming Return: ${payload.new.challan_no}`); refreshAllData(); }
           }
-          if (payload.eventType === 'DELETE' && userRole === 'retail') {
-              triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot."); refreshAllData();
-          }
+          if (payload.eventType === 'DELETE' && userRole === 'retail') { triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot."); refreshAllData(); }
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole, isOnline]);
 
-  // --- QUEUE SYNC ENGINE ---
   const syncOfflineQueue = async () => {
     if (!isOnline || offlineQueue.length === 0 || isSyncing) return;
-    setIsSyncing(true);
-    let remaining = [...offlineQueue];
-    let syncedCount = 0;
-    
+    setIsSyncing(true); let remaining = [...offlineQueue]; let syncedCount = 0;
     for (const item of offlineQueue) {
       const { error } = await supabase.from('transactions').insert(item.payload);
-      if (!error) {
-        remaining = remaining.filter(q => q.id !== item.id);
-        syncedCount++;
-      }
+      if (!error) { remaining = remaining.filter(q => q.id !== item.id); syncedCount++; }
     }
-    
-    setOfflineQueue(remaining);
-    setIsSyncing(false);
-    if (syncedCount > 0) {
-      triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`);
-      refreshAllData();
-    }
+    setOfflineQueue(remaining); setIsSyncing(false);
+    if (syncedCount > 0) { triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`); refreshAllData(); }
   };
 
   const executeTransaction = async (txPayload, alertTitle, alertMsg, onSuccess) => {
@@ -333,10 +367,7 @@ export default function App() {
       if (error) {
          setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
          triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`);
-      } else {
-         triggerSystemAlert(alertTitle, alertMsg);
-         refreshAllData();
-      }
+      } else { triggerSystemAlert(alertTitle, alertMsg); refreshAllData(); }
     } else {
       setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
       triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`);
@@ -344,23 +375,20 @@ export default function App() {
     if (onSuccess) onSuccess();
   };
 
-  // --- ACTIONS ---
   const saveAdminNote = async (keyField, keyValue) => {
     if(!isOnline) { alert("Internet required to save notes."); return; }
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
-      if (error) throw error;
-      await fetchLedgerData();
-      setOpenNoteId(null);
+      if (error) throw error; await fetchLedgerData(); setOpenNoteId(null);
     } catch (error) { alert(`Failed to save note: ${error.message}`); }
   };
 
+  // SOFT DELETE IMPLEMENTATION
   const deleteLedgerGroup = async (keyField, keyValue) => {
     if(!isOnline) { alert("Internet required to delete records."); return; }
-    if (window.confirm(`MASTER OVERRIDE: Permanently delete all records for ${keyValue}? This cannot be undone.`)) {
-      const { error } = await supabase.from('transactions').delete().eq(keyField, keyValue);
-      if (error) alert(`Deletion Failed: ${error.message}`);
-      else { refreshAllData(); }
+    if (window.confirm(`MASTER OVERRIDE: Mark all records for ${keyValue} as DELETED?\n\nThis will zero-out the quantities but keep the Sequence Number visible in the ledger for auditing transparency.`)) {
+      const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(keyField, keyValue);
+      if (error) alert(`Deletion Failed: ${error.message}`); else refreshAllData();
     }
   };
 
@@ -390,97 +418,189 @@ export default function App() {
       if (error) throw error;
       if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(data[0][column].replace(prefix, '')) + 1).padStart(3, '0')}`;
       return `${prefix}001`;
-    } catch (e) {
-      return `${prefix}-OFF-${Math.floor(Date.now() / 1000)}`;
-    }
+    } catch (e) { return `${prefix}-OFF-${Math.floor(Date.now() / 1000)}`; }
   };
 
   const getCategory = (desc) => {
-    const item = masterItems.find(i => String(i.description).trim().toUpperCase() === String(desc).trim().toUpperCase()); 
+    const normDesc = normalizeString(desc);
+    const item = masterItems.find(i => normalizeString(i.description) === normDesc); 
     if (item && item.category) return item.category;
-    const upperDesc = desc ? String(desc).trim().toUpperCase() : '';
-    if (upperDesc.includes('TYRE') || upperDesc.includes('TUBE') || upperDesc.match(/\d{2,3}\/\d{2,3}/)) return 'TVS';
+    if (normDesc.includes('TYRE') || normDesc.includes('TUBE') || normDesc.match(/\d{2,3}\d{2,3}/)) return 'TVS';
     return 'SERVO';
   };
 
   const getUnit = (desc) => {
-    if (!desc) return ''; const upperDesc = String(desc).trim().toUpperCase(); let cat = getCategory(desc);
+    if (!desc) return 'NOS'; 
+    const normDesc = normalizeString(desc);
+    let cat = getCategory(desc);
     if (cat === 'SERVO') {
-      if (/210\s*L/i.test(desc) || /182\s*KG/i.test(desc)) return 'BRL';
-      if (/50\s*L/i.test(desc)) return 'DRUM';
-      if (/(7\.5|10|15|20|26)\s*(L|KG)/i.test(desc)) return 'BUC';
-      return 'CANS';
+      if (normDesc.includes('210L') || normDesc.includes('182KG')) return 'BRL';
+      if (normDesc.includes('50L')) return 'DRUM';
+      if (normDesc.includes('75L') || normDesc.includes('10L') || normDesc.includes('15L') || normDesc.includes('20L') || normDesc.includes('26L') || normDesc.includes('26KG')) return 'BUC';
+      return 'NOS';
     } else {
-      const learned = JSON.parse(localStorage.getItem('tvsUnits') || '{}');
-      if (learned[desc]) return learned[desc]; return /\bTT\b/i.test(upperDesc) ? 'SET' : 'PCS';
+      const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+      if (learned[normDesc]) return learned[normDesc]; 
+      return normDesc.includes('TT') ? 'SET' : 'PCS';
     }
   };
 
-  const getDisplayQty = (desc, qty, unit) => {
-    const item = masterItems.find(i => String(i.description).trim().toUpperCase() === String(desc).trim().toUpperCase());
+  // HYPER-STRICT MATH CONVERSION ENGINE
+  const getDisplayQty = (desc, qty, rawUnit) => {
+    if (!desc) return `0 NOS`;
+    let unit = rawUnit;
+    if (!unit || unit.toUpperCase() === 'CANS') unit = 'NOS'; 
+    
+    const normDesc = normalizeString(desc);
+    const item = masterItems.find(i => normalizeString(i.description) === normDesc);
     const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : '';
-    if (item && item.category === 'SERVO' && item.ratio && parseFloat(item.ratio) > 1) {
-        const ratio = parseInt(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio;
+    
+    if (item && item.category === 'SERVO' && item.ratio && !isNaN(parseFloat(item.ratio)) && parseFloat(item.ratio) > 1) {
+        const ratio = parseFloat(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio;
         let parts = []; if (cases > 0) parts.push(`${cases} CAR`); if (cans > 0) parts.push(`${cans} ${unit}`);
         return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
     }
     return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
   };
 
-  const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState) => {
-    setItemState(item); setSearchState(item.description); setUnitState(getUnit(item.description));
+  const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
+    setItemState(item); setSearchState(item.description); 
+    let newUnit = getUnit(item.description); setUnitState(newUnit);
+    
+    if (item.category === 'TVS') {
+        const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+        learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
+    }
     setHighlightIndex(-1); if(setDropdownState) setDropdownState(false);
+
+    if (searchQueryStr && searchQueryStr.length >= 2) {
+        const sq = normalizeString(searchQueryStr);
+        if (sq !== normalizeString(item.description) && (!item.sku || sq !== normalizeString(item.sku))) {
+            const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}');
+            aliases[sq] = item.description; localStorage.setItem('god_aliases', JSON.stringify(aliases));
+        }
+    }
+    
+    setTimeout(() => focusRef?.current?.focus(), 50);
   };
 
   const smartSearch = (query) => {
-    if (!query) return []; const terms = query.toLowerCase().split(' ').filter(Boolean);
-    return masterItems.filter(item => terms.every(term => item.description.toLowerCase().includes(term))).slice(0, 50);
+    if (!query) return []; 
+    const sq = normalizeString(query);
+    const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}');
+    const aliasedDesc = aliases[sq];
+    
+    const terms = query.toUpperCase().split(' ').filter(Boolean); 
+    let results = masterItems.filter(item => {
+       if (aliasedDesc && normalizeString(item.description) === normalizeString(aliasedDesc)) return true;
+       if (item.sku && normalizeString(item.sku) === sq) return true;
+       const desc = cleanDesc(item.description); const sku = item.sku ? cleanDesc(item.sku) : '';
+       return terms.every(term => desc.includes(term) || sku.includes(term));
+    });
+    
+    if (aliasedDesc) {
+        const exactMatch = results.find(i => normalizeString(i.description) === normalizeString(aliasedDesc));
+        if (exactMatch) {
+            results = results.filter(i => normalizeString(i.description) !== normalizeString(aliasedDesc));
+            results.unshift(exactMatch);
+        }
+    }
+    return results.slice(0, 50);
   };
 
-  // --- PDF ENGINE ---
+  // --- MULTI-PAGE PDF ENGINE ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
-    doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
-    doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-    doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-    doc.setLineWidth(0.4); doc.line(5, 21, 143, 21); doc.setFontSize(9);
-    doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(challanNo, 32, 27);
-    doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(), 116, 27);
-    doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-    const tableTop = 41; doc.setFillColor(245, 245, 245); doc.rect(5.2, tableTop + 0.2, 137.6, 6.6, 'F'); 
-    doc.setLineWidth(0.4); doc.line(5, tableTop, 143, tableTop); doc.line(5, tableTop + 7, 143, tableTop + 7);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-    doc.text("SR", 10, tableTop + 5, { align: "center" }); doc.text("ITEM DESCRIPTION", 56, tableTop + 5, { align: "center" }); doc.text("NOS", 104, tableTop + 5, { align: "center" }); doc.text("QTY", 127.5, tableTop + 5, { align: "center" });
-    doc.setFont("helvetica", "normal"); let y = tableTop + 12; let totalNos = 0;
+    const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
+    
+    let totalNos = 0;
+    
+    const drawPageTemplate = (isFirstPage) => {
+        if (!isFirstPage) doc.addPage();
+        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setLineWidth(0.4); doc.line(5, 21, 143, 21); doc.setFontSize(9);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(challanNo, 32, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        doc.setFillColor(245, 245, 245); doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
+        doc.setLineWidth(0.4); doc.line(5, 41, 143, 41); doc.line(5, 48, 143, 48);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 56, 46, { align: "center" }); doc.text("NOS", 104, 46, { align: "center" }); doc.text("QTY", 127.5, 46, { align: "center" });
+        doc.setFont("helvetica", "normal");
+    };
+
+    drawPageTemplate(true);
+    let y = 53;
+    let startY = 41;
+
     itemsList.forEach((item, index) => {
       const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 80); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
+      const rowHeight = (splitDesc.length * 4) + 1;
+      
+      if (y + rowHeight > 185) {
+          doc.setLineWidth(0.4); doc.line(5, y - 2, 143, y - 2);
+          doc.line(15, startY, 15, y - 2); doc.line(97, startY, 97, y - 2); doc.line(112, startY, 112, y - 2);
+          doc.line(5, startY, 5, y - 2); doc.line(143, startY, 143, y - 2);
+          drawPageTemplate(false);
+          y = 53;
+      }
+
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
       doc.setFont("helvetica", "bold"); doc.text(paddedQty, 104, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 127.5, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      const rowHeight = (splitDesc.length * 4) + 1;
+      
       if (index < itemsList.length - 1) { doc.setLineWidth(0.1); doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); }
       y += rowHeight + 2; 
     });
+
     const tableBottom = Math.max(y - 1, 165); doc.setFillColor(235, 235, 235); doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
     doc.setLineWidth(0.4); doc.line(5, tableBottom, 143, tableBottom); doc.setFont("helvetica", "bold");
     doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 104, tableBottom + 4.2, { align: "center" });
-    doc.line(5, tableBottom + 6, 143, tableBottom + 6); doc.line(15, tableTop, 15, tableBottom + 6); doc.line(97, tableTop, 97, tableBottom + 6); doc.line(112, tableTop, 112, tableBottom + 6); 
+    doc.line(5, tableBottom + 6, 143, tableBottom + 6);
+    doc.line(15, startY, 15, tableBottom + 6); doc.line(97, startY, 97, tableBottom + 6); doc.line(112, startY, 112, tableBottom + 6);
+    doc.line(5, startY, 5, tableBottom + 6); doc.line(143, startY, 143, tableBottom + 6); 
+
     const sigY = 183; doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
       doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); 
-      // NEW: Left side auth timestamp
-      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate()} ${formatTime()}`, 8, sigY + 10);
+      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 10);
     }
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-    // Keep right side auth timestamp as well for the issuer
-    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate()} ${formatTime()}`, 140, sigY + 4, { align: "right" });
+    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 4, { align: "right" });
     doc.setLineWidth(0.4); doc.rect(5, 5, 138, 195); doc.save(`${challanNo}.pdf`);
   };
 
-  // --- EXCEL ENGINE ---
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...');
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target.result); const workbook = XLSX.read(data, { type: 'array' }); let finalItemsToUpload = [];
+        const normalizeRow = (row) => { const normalized = {}; for (let key in row) normalized[key.toLowerCase().trim()] = row[key]; return normalized; };
+        ['SERVO', 'TVS'].forEach(sheetName => {
+          const sheet = workbook.SheetNames.find(s => s.toUpperCase() === sheetName);
+          if (sheet) {
+            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
+              const norm = normalizeRow(row); 
+              return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null };
+            }).filter(item => item.description);
+            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
+          }
+        });
+        await supabase.from('master_items').delete().neq('description', 'dummy'); 
+        await supabase.from('master_items').insert(finalItemsToUpload);
+        refreshAllData();
+      } catch (error) { setUploadStatus(`Error`); }
+    };
+    reader.readAsArrayBuffer(file); 
+  };
+
+  // --- LOCAL EXCEL EXPORT (Restored) ---
   const downloadLedger = () => {
     if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
     const dispatchedDataObj = {}; const returnsDataObj = {};
@@ -490,7 +610,7 @@ export default function App() {
       if (row.status === 'RETURN_ACCEPTED') {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
-      } else if (row.status !== 'STOCK_ADJUSTMENT') {
+      } else {
          if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
          if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
          dispatchedDataObj[key].items.push(row);
@@ -502,10 +622,13 @@ export default function App() {
     const itemSummary = {};
     
     ledgerData.forEach(row => {
-      if (row.status === 'STOCK_ADJUSTMENT') return; // Ignore adjustments in the pure transaction ledger
-      const desc = String(row.item_desc).trim().toUpperCase(); const q = parseInt(row.disp_qty || row.req_qty) || 0;
-      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc) };
-      if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      const desc = cleanDesc(row.item_desc); const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
+      
+      if (row.status !== 'DELETED') {
+        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
+        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      }
     });
 
     const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
@@ -521,15 +644,22 @@ export default function App() {
 
     let globalTxTotal = 0;
     dispatchedGroups.forEach(group => {
-      let bgColor = group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
+      let bgColor = group.status === "DELETED" ? "#f3f4f6" : group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
+      let qtyColor = group.status === "DELETED" ? 'color: #9ca3af;' : 'color: #000;';
+      
+      let challanText = group.challan_no || '-';
+      if (group.status === 'DELETED') challanText += " (DELETED)";
+
       group.items.forEach((row, i) => {
-        const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; globalTxTotal += rawQty;
+        const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; 
+        if (group.status !== 'DELETED') globalTxTotal += rawQty; 
+
         leftRowsFlat.push({
           type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
           date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
-          challan: group.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
+          challan: challanText, desc: cleanDesc(row.item_desc), nos: String(rawQty).padStart(2, '0'),
           qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          adminNote: group.admin_note || '', color: bgColor, qtyColor: 'color: #000;' 
+          adminNote: group.admin_note || '', color: bgColor, qtyColor: qtyColor 
         });
       });
     });
@@ -549,7 +679,7 @@ export default function App() {
           leftRowsFlat.push({
             type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
             date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
-            challan: row.challan_no || '-', desc: String(row.item_desc).trim().toUpperCase(), nos: String(rawQty).padStart(2, '0'),
+            challan: row.challan_no || '-', desc: cleanDesc(row.item_desc), nos: String(rawQty).padStart(2, '0'),
             qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
             note: row.note || '', color: bgColor, qtyColor: 'color: #dc2626;' 
           });
@@ -568,7 +698,7 @@ export default function App() {
         let servoTotal = 0;
         servoEntries.forEach(([desc, data]) => { 
             servoTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
+            rightRowsFlat.push({ type: 'summary_data', desc: cleanDesc(data.rawItemDesc), nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
         });
         rightRowsFlat.push({ type: 'summary_total', total: String(servoTotal).padStart(2, '0'), color: '#fef08a' });
     }
@@ -577,7 +707,7 @@ export default function App() {
         let tvsTotal = 0;
         tvsEntries.forEach(([desc, data]) => { 
             tvsTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc, nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
+            rightRowsFlat.push({ type: 'summary_data', desc: cleanDesc(data.rawItemDesc), nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
         });
         rightRowsFlat.push({ type: 'summary_total', total: String(tvsTotal).padStart(2, '0'), color: '#fef08a' });
     }
@@ -654,47 +784,57 @@ export default function App() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...');
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = new Uint8Array(e.target.result); const workbook = XLSX.read(data, { type: 'array' }); let finalItemsToUpload = [];
-        const normalizeRow = (row) => { const normalized = {}; for (let key in row) normalized[key.toLowerCase().trim()] = row[key]; return normalized; };
-        ['SERVO', 'TVS'].forEach(sheetName => {
-          const sheet = workbook.SheetNames.find(s => s.toUpperCase() === sheetName);
-          if (sheet) {
-            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
-              const norm = normalizeRow(row); return { description: norm.description, ratio: norm.ratio || 1, category: sheetName };
-            }).filter(item => item.description);
-            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
-          }
-        });
-        await supabase.from('master_items').delete().neq('description', 'dummy'); 
-        await supabase.from('master_items').insert(finalItemsToUpload);
-        refreshAllData();
-      } catch (error) { setUploadStatus(`Error`); }
-    };
-    reader.readAsArrayBuffer(file); 
-  };
-
-  const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix) => {
+  // --- QUICK CLEAR & KEYBOARD INTERCEPTOR ---
+  const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix, focusRef, currentSelectedItem) => {
+    // 1. DELETE key ALWAYS clears the entire field instantly (Fast UI reset)
+    if (e.key === 'Delete') {
+        e.preventDefault();
+        setSelected(null);
+        setSearch('');
+        setUnitState('NOS');
+        if (setDropdownOpen) setDropdownOpen(false);
+        return;
+    }
+    // 2. BACKSPACE key clears the field ONLY if an item is fully selected (Otherwise it acts as normal backspace)
+    if (e.key === 'Backspace' && currentSelectedItem) {
+        e.preventDefault();
+        setSelected(null);
+        setSearch('');
+        setUnitState('NOS');
+        if (setDropdownOpen) setDropdownOpen(false);
+        return;
+    }
     if (e.key === 'ArrowDown') { 
       e.preventDefault(); setHighlightIndex(p => { const next = p < itemsList.length - 1 ? p + 1 : p; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); 
     } else if (e.key === 'ArrowUp') { 
       e.preventDefault(); setHighlightIndex(p => { const next = p > 0 ? p - 1 : 0; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); 
     } else if (e.key === 'Enter') {
-      e.preventDefault(); if (highlightIndex >= 0 && itemsList[highlightIndex]) handleItemSelect(itemsList[highlightIndex], setSelected, setUnitState, setSearch, setDropdownOpen);
+      e.preventDefault(); 
+      if (highlightIndex >= 0 && itemsList[highlightIndex]) {
+          handleItemSelect(itemsList[highlightIndex], setSelected, setUnitState, setSearch, setDropdownOpen, e.target.value, focusRef);
+      }
+    } else if (e.key === 'Tab' || e.key === 'Escape') {
+      if (setDropdownOpen) setDropdownOpen(false);
     }
   };
 
-  // --- ACTIONS ---
   const retailFilteredItems = smartSearch(retailSearch);
+  
   const addToRetailCart = (e) => {
-    e.preventDefault(); if (!retailSelectedItem || !retailQty) return;
-    setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: retailQty, unit: retailSelectedUnit }]);
+    if (e) e.preventDefault();
+    if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
+    
+    let finalQty = parseInt(retailQty);
+    if (finalQty < 0) {
+        setRetailMode('RETURN');
+        finalQty = Math.abs(finalQty);
+    }
+
+    setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
     setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
+    setTimeout(() => retailSearchRef.current?.focus(), 50); 
   };
+  
   const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index].req_qty = val; setRetailCart(updated); };
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
@@ -706,17 +846,28 @@ export default function App() {
       unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
       challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
     }));
-    
     executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
       setRetailCart([]); setRetailReturnNote('');
     });
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
+  
   const addToDepotCart = (e) => {
-    e.preventDefault(); if (!selectedItem || !qty) return;
-    setDepotCart([...depotCart, { ...selectedItem, disp_qty: qty, unit: selectedUnit }]); setSearchQuery(''); setQty(''); setSelectedItem(null);
+    if (e) e.preventDefault();
+    if (!selectedItem || !qty || parseInt(qty) === 0) return;
+    
+    let finalQty = parseInt(qty);
+    if (finalQty < 0) {
+        setDepotMode('RETURN_REQUEST');
+        finalQty = Math.abs(finalQty);
+    }
+
+    setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
+    setSearchQuery(''); setQty(''); setSelectedItem(null);
+    setTimeout(() => depotSearchRef.current?.focus(), 50); 
   };
+
   const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index].disp_qty = val; setDepotCart(updated); };
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
@@ -725,10 +876,8 @@ export default function App() {
     if (depotMode === 'DISPATCH') {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-      
       executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
-        printPDF(challanNo, depotCart);
-        setDepotCart([]); 
+        printPDF(challanNo, depotCart); setDepotCart([]); 
       });
     } else {
       const groupId = await getNextSequence('RR');
@@ -736,7 +885,6 @@ export default function App() {
         group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
         unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
       }));
-      
       executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
         setDepotCart([]); setDepotReturnNote('');
       });
@@ -764,7 +912,7 @@ export default function App() {
     if (!editPOModal) return; const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
     for (const item of editPOModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
-      if (dispatchQty === 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+      if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
       if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
       if (dispatchQty < reqQty) { const newPO = await getNextSequence('PO'); backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); }
     }
@@ -781,7 +929,7 @@ export default function App() {
     if (!processReturnModal) return; const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
     for (const item of processReturnModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
-      if (dispatchQty === 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+      if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
       if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
       if (dispatchQty < reqQty) { const newRR = await getNextSequence('RR'); backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); }
     }
@@ -790,35 +938,48 @@ export default function App() {
     setProcessReturnModal(null); refreshAllData();
   };
 
-  // --- UI RENDER ---
   if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold select-none">LOADING SYSTEM...</div>;
+  
   if (!session) return (
     <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans select-none">
       <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full relative">
         {!isOnline && <div className="absolute top-0 left-0 w-full bg-red-600 text-white text-center text-[10px] font-black py-0.5">OFFLINE MODE</div>}
         <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2 mt-2">GOD LOGIN</h2>
         <form onSubmit={handleLogin} className="space-y-4">
-          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text" required />
-          <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all disabled:opacity-50">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
+          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-3 md:p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text" required />
+          <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-3 md:py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all disabled:opacity-50">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
           {loginError && <p className="text-red-600 font-bold text-center text-sm uppercase">{loginError}</p>}
         </form>
       </div>
     </div>
   );
 
+  const hasRetailInbox = Object.keys(incomingDeliveries).length > 0 || Object.keys(pendingDepotReturns).length > 0 || Object.keys(pendingPOs).length > 0;
+  const hasDepotInbox = Object.keys(pendingPOs).length > 0 || Object.keys(pendingReturns).length > 0;
+
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
+      
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
           <div className="flex items-center gap-2">
-            <span className="tracking-widest">Gujarat Oil Depot</span>
-            {!isOnline && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            <div className="relative flex items-center">
+              <span className="tracking-widest">Gujarat Oil Depot</span>
+              <a href="YOUR_GOOGLE_WEB_APP_URL_HERE" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
+              {actionableCount > 0 && (
+                <span className="absolute -top-1 -right-3 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                </span>
+              )}
+            </div>
+            {!isOnline && <span className="ml-4 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC PENDING (${offlineQueue.length})`}</span>}
           </div>
           
           <div className="flex gap-2 items-center">
             {userRole && (
-              <div className="bg-gray-700 p-1 flex gap-1 rounded">
+              <div className="p-1 flex gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
                   <button onClick={() => setView('depot')} className={`px-3 py-1.5 text-xs font-bold ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
@@ -833,74 +994,74 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="container mx-auto p-4">
-        {/* MODALS */}
+      <main className="container mx-auto p-3 md:p-4">
+        {/* ================= MODALS ================= */}
         {verifyModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-lg w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase">VERIFY GOODS: {verifyModal.challanNo}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-blue-800">VERIFY GOODS: {verifyModal.challanNo}</h2>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
                 {verifyModal.items.map((item, idx) => (
-                  <label key={idx} className={`flex items-center space-x-3 p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-green-100 border-green-600' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                    <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-black select-text" />
-                    <span className="flex-1 text-sm font-bold text-gray-800">{item.item_desc}</span>
-                    <span className="text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
+                  <label key={idx} className={`flex items-center space-x-3 p-2 md:p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
+                    <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600 select-text" />
+                    <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800">{item.item_desc}</span>
+                    <span className="text-[13px] md:text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
                   </label>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-green-700 text-white py-3 text-sm font-bold hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
+                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
+                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
               </div>
             </div>
           </div>
         )}
 
         {editPOModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-3 mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
+                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-sm font-bold hover:bg-blue-900 uppercase">Generate Challan</button>
+                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase">Generate Challan</button>
               </div>
             </div>
           </div>
         )}
 
         {processReturnModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-xl w-full p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-lg font-bold border-b-2 border-black pb-3 mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
-              <div className="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-24 text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-red-50 border border-red-300 p-2">
+                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-3 text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-sm font-bold hover:bg-red-900">GENERATE RETURN</button>
+                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900">GENERATE RETURN</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* VIEWS */}
+        {/* ================= VIEWS ================= */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -911,44 +1072,44 @@ export default function App() {
         )}
 
         {view === 'ledger' && (
-          <div className="space-y-4">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-4">
-              <div className="flex items-center gap-4">
+          <div className="space-y-3 md:space-y-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-2 border-black p-3 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] gap-3 md:gap-4">
+              <div className="flex items-center gap-3 md:gap-4">
                 <span className="font-black text-[13px] uppercase">{uploadStatus}</span>
                 {(userRole === 'admin' || userRole === 'master') && (
-                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-4 py-2 rounded-sm text-[13px] font-bold cursor-pointer">
+                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-3 md:px-4 py-1.5 md:py-2 rounded-sm text-[11px] md:text-[13px] font-bold cursor-pointer">
                     UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
                   </label>
                 )}
               </div>
               
               <div className="flex items-center gap-2">
-                <span className="text-[13px] font-bold uppercase mr-1">Ledger Month:</span>
-                <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
-                  {monthNames.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                <span className="text-[11px] md:text-[13px] font-bold uppercase mr-1">Ledger Month:</span>
+                <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1 md:p-1.5 text-[13px] md:text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
+                  {availableMonths.map(m => <option key={m} value={m}>{monthNames[m]}</option>)}
                 </select>
-                <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1.5 text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
+                <select value={ledgerYear} onChange={(e) => setLedgerYear(Number(e.target.value))} className="border-2 border-black p-1 md:p-1.5 text-[13px] md:text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
                 {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-5 py-2 font-bold text-[13px] ml-2">EXPORT EXCEL</button>
+                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 md:px-5 py-1.5 md:py-2 font-bold text-[11px] md:text-[13px] ml-2">EXPORT EXCEL</button>
                 )}
               </div>
             </div>
 
             <div className="bg-white border-2 border-black overflow-hidden shadow-sm">
               <div className="max-h-[65vh] overflow-y-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm text-sm">
+                <table className="w-full text-left border-collapse text-[13px] md:text-sm">
+                  <thead className="bg-gray-100 border-b-2 border-black font-bold uppercase sticky top-0 z-10 shadow-sm text-[13px] md:text-sm">
                     <tr>
-                      <th className="p-3 border-r border-gray-300 w-28 text-center select-text whitespace-nowrap">DATE / TIME</th>
-                      <th className="p-3 border-r border-gray-300 select-text whitespace-nowrap">CHALLAN NO</th>
-                      <th className="p-3 border-r border-gray-300 w-1/2 select-text whitespace-nowrap">ITEM DESCRIPTION</th>
-                      <th className="p-3 text-center border-r border-gray-300 select-text whitespace-nowrap">NOS</th>
-                      <th className="p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
-                      <th className="p-3 text-center border-r border-gray-300 w-48 select-none whitespace-nowrap">ADMIN NOTE</th>
-                      <th className="p-3 text-center w-20 select-none whitespace-nowrap">PDF</th>
-                      {userRole === 'master' && <th className="p-3 text-center w-16 select-none bg-red-100 text-red-800 whitespace-nowrap">DEL</th>}
+                      <th className="p-2 md:p-3 border-r border-gray-300 w-24 md:w-28 text-center select-text whitespace-nowrap">DATE / TIME</th>
+                      <th className="p-2 md:p-3 border-r border-gray-300 select-text whitespace-nowrap">CHALLAN NO</th>
+                      <th className="p-2 md:p-3 border-r border-gray-300 w-1/2 select-text whitespace-nowrap">ITEM DESCRIPTION</th>
+                      <th className="p-2 md:p-3 text-center border-r border-gray-300 select-text whitespace-nowrap">NOS</th>
+                      <th className="p-2 md:p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
+                      <th className="p-2 md:p-3 text-center border-r border-gray-300 w-40 md:w-48 select-none whitespace-nowrap">ADMIN NOTE</th>
+                      <th className="p-2 md:p-3 text-center w-16 md:w-20 select-none whitespace-nowrap">PDF</th>
+                      {userRole === 'master' && <th className="p-2 md:p-3 text-center w-12 md:w-16 select-none bg-red-100 text-red-800 whitespace-nowrap">DEL</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -958,64 +1119,65 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
-                      <tr><td colSpan={userRole === 'master' ? "8" : "7"} className="p-8 text-center text-gray-500 font-bold uppercase text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
+                      <tr><td colSpan={userRole === 'master' ? "8" : "7"} className="p-6 md:p-8 text-center text-gray-500 font-bold uppercase text-[13px] md:text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
                       const key = row.challan_no || row.group_id; 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
-                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : group.status === 'STOCK_ADJUSTMENT' ? 'bg-purple-50' : 'bg-blue-50'} select-text`}>
-                        <td className="p-3 border-r border-gray-300 text-center font-bold leading-tight">
-                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[13px]">{formatTime(group.timestamp)}</span>
+                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'DELETED' ? 'bg-gray-200 opacity-60' : group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
+                        <td className="p-2 md:p-3 border-r border-gray-300 text-center font-bold leading-tight">
+                          {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[11px] md:text-[13px]">{formatTime(group.timestamp)}</span>
                         </td>
-                        <td className="p-3 border-r border-gray-200 font-bold text-gray-900">
+                        <td className="p-2 md:p-3 border-r border-gray-200 font-bold text-gray-900">
                           {group.challan_no || 'PENDING'}
+                          {group.status === 'DELETED' && <span className="block text-red-600 font-black text-[10px] md:text-[11px] mt-1">DELETED</span>}
                         </td>
-                        <td className="p-3 border-r border-gray-200">
-                          <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[300px] xl:max-w-[400px] ${group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-900' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                        <td className="p-2 md:p-3 border-r border-gray-200">
+                          <ul className="space-y-1 md:space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[250px] md:max-w-[300px] xl:max-w-[400px] ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-1 md:mr-2 mb-0.5"></span>{i.item_desc}</li>)}
                           </ul>
                         </td>
-                        <td className="p-3 border-r border-gray-200 text-center">
-                          <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900': group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-900' : ''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
+                        <td className="p-2 md:p-3 border-r border-gray-200 text-center">
+                          <ul className="space-y-1 md:space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
                           </ul>
                         </td>
-                        <td className="p-3 border-r border-gray-200 text-center whitespace-nowrap">
-                           <ul className="space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600': group.status === 'STOCK_ADJUSTMENT' ? 'text-purple-600' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                        <td className="p-2 md:p-3 border-r border-gray-200 text-center whitespace-nowrap">
+                           <ul className="space-y-1 md:space-y-1.5">
+                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
                           </ul>
                         </td>
-                        <td className="p-3 border-r border-gray-200 align-top select-none">
-                          {group.status !== 'RETURN_ACCEPTED' && group.status !== 'STOCK_ADJUSTMENT' ? (
-                            <div className="flex flex-col gap-2 min-w-[140px] max-w-[200px]">
+                        <td className="p-2 md:p-3 border-r border-gray-200 align-top select-none">
+                          {group.status !== 'RETURN_ACCEPTED' ? (
+                            <div className="flex flex-col gap-1.5 md:gap-2 min-w-[120px] md:min-w-[140px] max-w-[200px]">
                               {(userRole === 'admin' || userRole === 'master') ? (
                                 openNoteId === group.keyValue ? (
-                                  <div className="flex flex-col gap-1.5 w-full mt-1">
+                                  <div className="flex flex-col gap-1 md:gap-1.5 w-full mt-1">
                                     <textarea
-                                      className="w-full border-2 border-black p-2 text-[13px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
+                                      className="w-full border-2 border-black p-1.5 md:p-2 text-[11px] md:text-[13px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
                                       rows="3"
                                       value={tempNoteText}
                                       onChange={(e) => setTempNoteText(e.target.value)}
                                       placeholder="Enter note..."
                                       autoFocus
                                     />
-                                    <div className="flex gap-1.5 mt-1">
-                                      <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-2 py-1.5 text-[11px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
-                                      <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-2 py-1.5 text-[11px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
+                                    <div className="flex gap-1 md:gap-1.5 mt-1">
+                                      <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-1.5 md:px-2 py-1 md:py-1.5 text-[10px] md:text-[11px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
+                                      <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-1.5 md:px-2 py-1 md:py-1.5 text-[10px] md:text-[11px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
                                     </div>
                                   </div>
                                 ) : (
                                   <div className="flex flex-col items-start gap-1">
                                     <button 
                                       onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                      className="text-[11px] px-2.5 py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
+                                      className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
                                     >
                                       {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                     </button>
                                     {group.admin_note && (
-                                      <div className="text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
+                                      <div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">
                                         {group.admin_note}
                                       </div>
                                     )}
@@ -1024,40 +1186,38 @@ export default function App() {
                               ) : (
                                 <div className="flex flex-col items-start gap-1">
                                   {group.admin_note ? (
-                                    <div className="text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1.5">
+                                    <div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">
                                       {group.admin_note}
                                     </div>
                                   ) : (
-                                    <span className="text-gray-400 text-[13px] italic mt-1.5">No Note</span>
+                                    <span className="text-gray-400 text-[11px] md:text-[13px] italic mt-1 md:mt-1.5">No Note</span>
                                   )}
                                 </div>
                               )}
                             </div>
-                          ) : group.status === 'STOCK_ADJUSTMENT' ? (
-                            <div className="text-sm font-bold text-purple-900">{group.items[0]?.note || 'Opening Balance'}</div>
                           ) : (
-                            <div className="text-center text-gray-400 text-sm">-</div>
+                            <div className="text-center text-gray-400 text-[13px] md:text-sm">-</div>
                           )}
                         </td>
-                        <td className="p-3 text-center vertical-middle select-none">
-                          {group.challan_no && isWithin30Days(group.timestamp) && group.status !== 'STOCK_ADJUSTMENT' ? (
+                        <td className="p-2 md:p-3 text-center vertical-middle select-none">
+                          {group.challan_no && group.status !== 'DELETED' && isWithin30Days(group.timestamp) ? (
                             <button onClick={() => {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
-                              className="text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2.5 py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
+                              className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 md:px-2.5 py-1 md:py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
                             >
                               PDF
                             </button>
                           ) : group.challan_no ? (
-                            <span className="text-[11px] text-gray-400 font-bold">LOCKED</span>
+                            <span className="text-[10px] md:text-[11px] text-gray-400 font-bold">{group.status === 'DELETED' ? 'VOID' : 'LOCKED'}</span>
                           ) : (
                             <span className="text-gray-300">-</span>
                           )}
                         </td>
                         {userRole === 'master' && (
-                          <td className="p-3 text-center vertical-middle select-none border-l border-red-200">
-                             <button onClick={() => deleteLedgerGroup(group.keyField, group.keyValue)} className="text-xl hover:scale-110 active:scale-95 transition-transform" title="Permanently Delete Group">🗑️</button>
+                          <td className="p-2 md:p-3 text-center vertical-middle select-none border-l border-red-200">
+                             <button onClick={() => deleteLedgerGroup(group.keyField, group.keyValue)} className="text-lg md:text-xl hover:scale-110 active:scale-95 transition-transform" title="Mark Group as Deleted">🗑️</button>
                           </td>
                         )}
                       </tr>
@@ -1067,7 +1227,7 @@ export default function App() {
               </div>
               {ledgerData.length >= ledgerLimit && (
                  <div className="bg-gray-100 border-t-2 border-black p-2 flex justify-center">
-                    <button onClick={() => setLedgerLimit(prev => prev + 50)} className="bg-black text-white px-6 py-2 text-xs font-bold uppercase hover:bg-gray-800 transition-colors">Load Older Records</button>
+                    <button onClick={() => setLedgerLimit(prev => prev + 50)} className="bg-black text-white px-5 md:px-6 py-1.5 md:py-2 text-[11px] md:text-xs font-bold uppercase hover:bg-gray-800 transition-colors">Load Older Records</button>
                  </div>
               )}
             </div>
@@ -1075,115 +1235,74 @@ export default function App() {
         )}
 
         {view === 'depot' && (
-          <div className="flex flex-col md:flex-row gap-4 items-start">
-            <div className="w-full md:w-1/2 space-y-4 order-2 md:order-1">
+          <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
+            
+            {/* DATA ENTRY SIDE (Left on Desktop, Top on Mobile) */}
+            <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
-                  <span>Pending PO Inbox</span>
-                  <span className="bg-gray-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
-                </div>
-                <div className="p-4">
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
-                    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-                      {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-4">
-                          <div className="font-bold text-[13px] mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
-                          <table className="w-full mb-4 border-collapse text-sm">
-                            <tbody>
-                              {items.map((item, idx) => (
-                                <tr key={idx} className="border-b border-gray-300 last:border-0">
-                                  <td className="py-2.5 pr-2 font-medium text-gray-800 uppercase select-text">{item.item_desc}</td>
-                                  <td className="py-2.5 text-right font-bold w-32 whitespace-nowrap select-text">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-[13px] py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
+                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
+                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
                 </div>
               </div>
 
-              <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
-                <div className="bg-red-100 border-b-2 border-red-400 px-4 py-2.5 font-bold text-sm uppercase text-red-800 flex justify-between items-center">
-                  <span>Incoming Returns</span>
-                  <span className="bg-red-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
-                </div>
-                <div className="p-4 max-h-64 overflow-y-auto">
-                  {Object.keys(pendingReturns).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
-                    <div className="space-y-4">
-                      {Object.entries(pendingReturns).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
-                          <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
-                            <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
-                          </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full md:w-1/2 flex flex-col gap-4 order-1 md:order-2">
-              <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
-                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
-                </div>
-              </div>
-
-              <form onSubmit={submitDepotAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
-                <div className="flex flex-col space-y-4">
+              <form onSubmit={submitDepotAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3 md:p-4">
+                <div className="flex flex-col space-y-3 md:space-y-4">
                   <div className="relative">
-                    <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
-                    <input type="text" value={searchQuery} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, null, setSelectedUnit, 'depot-item')} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
-                    {searchQuery.length > 0 && depotFilteredItems.length > 0 && !selectedItem && (
-                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                        {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, null)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}>{item.description}</div>)}
+                    <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">SEARCH ITEM / SKU</label>
+                    <input ref={depotSearchRef} type="text" value={searchQuery} onBlur={() => setTimeout(() => setIsDepotDropdownOpen(false), 200)} onFocus={() => { if(searchQuery.length > 0) setIsDepotDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, setIsDepotDropdownOpen, setSelectedUnit, 'depot-item', depotQtyRef, selectedItem)} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setIsDepotDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
+                    {searchQuery.length > 0 && isDepotDropdownOpen && depotFilteredItems.length > 0 && !selectedItem && (
+                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-[13px] md:text-sm font-bold">
+                        {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, setIsDepotDropdownOpen, searchQuery, depotQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-4">
+                  <div className="flex gap-3 md:gap-4">
                     <div className="flex-1">
-                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">QTY</label>
-                      <input type="number" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
+                      <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">QTY</label>
+                      <input ref={depotQtyRef} type="number" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={(e) => { if(e.key==='Enter') addToDepotCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
-                    <div className="w-32">
-                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">UNIT</label>
+                    <div className="w-28 md:w-32">
+                      <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">UNIT</label>
                       {selectedItem?.category === 'TVS' ? (
-                         <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
+                         <select value={selectedUnit} onChange={(e) => {
+                             setSelectedUnit(e.target.value);
+                             const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+                             learnedUnits[normalizeString(selectedItem.description)] = e.target.value;
+                             localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
+                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
-                         <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-3 bg-gray-200 text-gray-500 text-sm font-bold select-text" />
+                         <input type="text" value={selectedUnit} disabled className="w-full border-2 border-gray-200 p-2 md:p-3 bg-gray-200 text-gray-500 text-[13px] md:text-sm font-bold select-text" />
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 bg-gray-800 hover:bg-black border-black">
-                    + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'CART'}
+                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black">
+                    + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
               </form>
+            </div>
+
+            {/* CART & INBOX SIDE (Right on Desktop, Bottom on Mobile) */}
+            <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
               
+              {/* THE CART */}
               {depotCart.length > 0 && (
-                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-4 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
-                  <table className="w-full border-collapse mb-4 text-sm">
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 md:p-4 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
+                  <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
                     <tbody>
                       {depotCart.map((item, idx) => (
                         <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-50' : 'border-blue-200 hover:bg-blue-50'} last:border-0`}>
-                          <td className="py-2.5 flex items-center gap-3">
-                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2.5 py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
-                            <span className="font-bold text-gray-900 uppercase select-text">{item.description}</span>
+                          <td className="py-2 md:py-2.5 flex items-center gap-2 md:gap-3">
+                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase select-text text-[13px] md:text-sm">{item.description}</span>
                           </td>
-                          <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
-                            <div className="flex items-center justify-end gap-2">
-                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
-                              <span className={`font-normal text-[13px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
+                          <td className="py-2 md:py-2.5 text-right w-40 md:w-48 whitespace-nowrap select-text">
+                            <div className="flex items-center justify-end gap-1.5 md:gap-2">
+                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <span className={`font-normal text-[11px] md:text-[13px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -1191,127 +1310,155 @@ export default function App() {
                     </tbody>
                   </table>
                   {depotMode === 'RETURN_REQUEST' && (
-                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
+                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                     {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
+                </div>
+              )}
+
+              {/* INBOXES (Stacked Below Cart) */}
+              {!hasDepotInbox && depotCart.length === 0 && (
+                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
+                  NO PENDING INBOX TASKS
+                </div>
+              )}
+
+              {Object.keys(pendingPOs).length > 0 && (
+                <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+                  <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-gray-800 flex justify-between items-center">
+                    <span>Pending PO Inbox</span>
+                    <span className="bg-gray-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingPOs).length}</span>
+                  </div>
+                  <div className="p-3 md:p-4 max-h-[40vh] overflow-y-auto">
+                    <div className="space-y-3 md:space-y-4">
+                      {Object.entries(pendingPOs).map(([groupId, items]) => (
+                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-3 md:p-4">
+                          <div className="font-bold text-[11px] md:text-[13px] mb-2 md:mb-3 text-gray-600 border-b border-gray-200 pb-1 md:pb-1.5">{groupId}</div>
+                          <table className="w-full mb-3 md:mb-4 border-collapse text-[13px] md:text-sm">
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-b border-gray-300 last:border-0">
+                                  <td className="py-1.5 md:py-2.5 pr-2 font-medium text-gray-800 uppercase text-[11px] md:text-xs">{item.item_desc}</td>
+                                  <td className="py-1.5 md:py-2.5 text-right font-bold w-20 md:w-24 whitespace-nowrap text-[11px] md:text-xs">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-slate-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(pendingReturns).length > 0 && (
+                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
+                  <div className="bg-red-100 border-b-2 border-red-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-red-800 flex justify-between items-center">
+                    <span>Incoming Returns</span>
+                    <span className="bg-red-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingReturns).length}</span>
+                  </div>
+                  <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
+                    <div className="space-y-3 md:space-y-4">
+                      {Object.entries(pendingReturns).map(([challanNo, items]) => (
+                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-3 md:p-4">
+                          <div className="flex justify-between items-center mb-3 md:mb-4 border-b-2 border-red-200 pb-1.5 md:pb-2">
+                            <span className="font-bold text-[13px] md:text-sm text-red-900 select-text">{challanNo}</span>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                          </div>
+                          <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-b border-red-200 last:border-0">
+                                  <td className="py-1.5 md:py-2 pr-2 font-medium text-gray-800 uppercase text-[11px] md:text-xs">{item.item_desc}</td>
+                                  <td className="py-1.5 md:py-2 text-right font-bold w-20 md:w-24 whitespace-nowrap text-[11px] md:text-xs">{getDisplayQty(item.item_desc, item.disp_qty, item.unit)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         )}
 
+        {/* RETAIL VIEW */}
         {view === 'retail' && (
-          <div className="flex flex-col md:flex-row gap-4 items-start">
-            <div className="w-full md:w-1/2 space-y-4 order-2 md:order-1">
+          <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
+            
+            {/* DATA ENTRY SIDE (Left on Desktop, Top on Mobile) */}
+            <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2.5 font-bold text-sm uppercase text-gray-800 flex justify-between items-center">
-                  <span>Pending PO Inbox</span>
-                  <span className="bg-gray-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingPOs).length}</span>
-                </div>
-                <div className="p-4">
-                  {Object.keys(pendingPOs).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO PENDING ORDERS</p> : (
-                    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-                      {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-4">
-                          <div className="font-bold text-[13px] mb-3 text-gray-600 border-b border-gray-200 pb-1.5">{groupId}</div>
-                          <table className="w-full mb-4 border-collapse text-sm">
-                            <tbody>
-                              {items.map((item, idx) => (
-                                <tr key={idx} className="border-b border-gray-300 last:border-0">
-                                  <td className="py-2.5 pr-2 font-medium text-gray-800 uppercase select-text">{item.item_desc}</td>
-                                  <td className="py-2.5 text-right font-bold w-32 whitespace-nowrap select-text">{getDisplayQty(item.item_desc, item.req_qty, item.unit || getUnit(item.item_desc))}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-blue-800 hover:bg-blue-900 text-white font-bold text-[13px] py-2.5 border-2 border-blue-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
+                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
+                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
                 </div>
               </div>
 
-              <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
-                <div className="bg-red-100 border-b-2 border-red-400 px-4 py-2.5 font-bold text-sm uppercase text-red-800 flex justify-between items-center">
-                  <span>Incoming Returns</span>
-                  <span className="bg-red-800 text-white px-2.5 py-0.5 rounded text-xs leading-none">{Object.keys(pendingReturns).length}</span>
-                </div>
-                <div className="p-4 max-h-64 overflow-y-auto">
-                  {Object.keys(pendingReturns).length === 0 ? <p className="text-[13px] text-gray-500 font-bold text-center py-6">NO INCOMING RETURNS</p> : (
-                    <div className="space-y-4">
-                      {Object.entries(pendingReturns).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-4">
-                          <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
-                            <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-xs font-bold bg-white border border-gray-400 px-3 py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
-                          </div>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[13px] py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full md:w-1/2 flex flex-col gap-4 order-1 md:order-2">
-              <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
-                <div className="bg-gray-200 border-b-2 border-gray-400 px-4 py-2 font-bold flex space-x-2 text-sm uppercase text-gray-800">
-                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
-                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1.5 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
-                </div>
-              </div>
-
-              <form onSubmit={submitRetailAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-4">
-                <div className="flex flex-col space-y-4">
+              <form onSubmit={submitRetailAction} className="w-full bg-gray-100 border-2 border-gray-400 shadow-sm p-3 md:p-4">
+                <div className="flex flex-col space-y-3 md:space-y-4">
                   <div className="relative">
-                    <label className="block text-[13px] font-bold text-gray-700 mb-1.5">SEARCH ITEM</label>
-                    <input type="text" value={retailSearch} onFocus={() => setIsRetailDropdownOpen(true)} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item')} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
+                    <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">SEARCH ITEM / SKU</label>
+                    <input ref={retailSearchRef} type="text" value={retailSearch} onBlur={() => setTimeout(() => setIsRetailDropdownOpen(false), 200)} onFocus={() => { if (retailSearch.length > 0) setIsRetailDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item', retailQtyRef, retailSelectedItem)} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
                     {retailSearch.length > 0 && isRetailDropdownOpen && (
-                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-sm font-bold">
-                        {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen)} className={`p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[10px] font-bold text-gray-500 mr-2">[{item.category}]</span>{item.description}</div>)}
+                      <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-[13px] md:text-sm font-bold">
+                        {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen, retailSearch, retailQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-4">
+                  <div className="flex gap-3 md:gap-4">
                     <div className="flex-1">
-                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">QTY</label>
-                      <input type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} className="w-full border-2 border-gray-400 p-3 text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
+                      <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">QTY</label>
+                      <input ref={retailQtyRef} type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') addToRetailCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
                     </div>
-                    <div className="w-32">
-                      <label className="block text-[13px] font-bold text-gray-700 mb-1.5">UNIT</label>
+                    <div className="w-28 md:w-32">
+                      <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">UNIT</label>
                       {retailSelectedItem?.category === 'TVS' ? (
-                         <select value={retailSelectedUnit} onChange={(e) => setRetailSelectedUnit(e.target.value)} className="w-full border-2 border-gray-400 p-3 bg-white text-sm font-bold focus:outline-none cursor-pointer select-text">
+                         <select value={retailSelectedUnit} onChange={(e) => {
+                             setRetailSelectedUnit(e.target.value);
+                             const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+                             learnedUnits[normalizeString(retailSelectedItem.description)] = e.target.value;
+                             localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
+                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
-                         <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-3 bg-gray-200 text-gray-500 text-sm font-bold select-text" />
+                         <input type="text" value={retailSelectedUnit} disabled className="w-full border-2 border-gray-200 p-2 md:p-3 bg-gray-200 text-gray-500 text-[13px] md:text-sm font-bold select-text" />
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-2 bg-gray-800 hover:bg-black border-black`}>
+                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
               </form>
+            </div>
 
+            {/* CART & INBOX SIDE (Right on Desktop, Bottom on Mobile) */}
+            <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
+              
+              {/* THE CART */}
               {retailCart.length > 0 && (
-                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-4 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-green-400'}`}>
-                  <table className="w-full border-collapse mb-4 text-sm">
+                <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 md:p-4 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-slate-400'}`}>
+                  <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
                     <tbody>
                       {retailCart.map((item, idx) => (
-                        <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-green-200 hover:bg-green-50'} last:border-0`}>
-                          <td className="py-2.5 flex items-center gap-3">
-                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2.5 py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
-                            <span className="font-bold text-gray-900 uppercase select-text">{item.description}</span>
+                        <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-slate-200 hover:bg-slate-50'} last:border-0`}>
+                          <td className="py-2 md:py-2.5 flex items-center gap-2 md:gap-3">
+                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <span className="font-bold text-gray-900 uppercase select-text text-[13px] md:text-sm">{item.description}</span>
                           </td>
-                          <td className="py-2.5 text-right w-48 whitespace-nowrap select-text">
-                             <div className="flex items-center justify-end gap-2">
-                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-green-400 focus:border-green-600'} p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
-                              <span className={`font-normal text-[13px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-green-900'}`}>{item.unit || getUnit(item.description)}</span>
+                          <td className="py-2 md:py-2.5 text-right w-40 md:w-48 whitespace-nowrap select-text">
+                             <div className="flex items-center justify-end gap-1.5 md:gap-2">
+                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-slate-400 focus:border-slate-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <span className={`font-normal text-[11px] md:text-[13px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-slate-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
                         </tr>
@@ -1319,13 +1466,110 @@ export default function App() {
                     </tbody>
                   </table>
                   {retailMode === 'RETURN' && (
-                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-3 text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-4 select-text" />
+                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-green-700 hover:bg-green-800 border-green-900'}`}>
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-slate-800 hover:bg-slate-900 border-slate-900'}`}>
                     {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
               )}
+
+              {/* INBOXES (Stacked Below Cart) */}
+              {!hasRetailInbox && retailCart.length === 0 && (
+                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
+                  NO PENDING INBOX TASKS
+                </div>
+              )}
+
+              {Object.keys(incomingDeliveries).length > 0 && (
+                <div className="w-full bg-white border-2 border-blue-500 shadow-sm flex flex-col">
+                  <div className="bg-blue-600 border-b-2 border-blue-700 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-white flex justify-between items-center">
+                    <span>Incoming Deliveries</span>
+                    <span className="bg-white text-blue-800 px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none shadow-sm">{Object.keys(incomingDeliveries).length}</span>
+                  </div>
+                  <div className="p-3 md:p-4 max-h-[40vh] overflow-y-auto">
+                    <div className="space-y-3 md:space-y-4">
+                      {Object.entries(incomingDeliveries).map(([challanNo, items]) => (
+                        <div key={challanNo} className="border-2 border-blue-300 bg-blue-50 p-3 md:p-4">
+                          <div className="flex justify-between items-center mb-2 md:mb-3 border-b border-blue-200 pb-1.5 md:pb-2">
+                            <span className="font-bold text-[13px] md:text-sm text-blue-900">{challanNo}</span>
+                            <button onClick={() => printPDF(challanNo, items)} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-blue-100 text-blue-900">VIEW DOC</button>
+                          </div>
+                          <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-b border-blue-200 last:border-0">
+                                  <td className="py-1.5 md:py-2 pr-2 font-medium text-gray-800 uppercase text-[11px] md:text-xs">{item.item_desc}</td>
+                                  <td className="py-1.5 md:py-2 text-right font-bold w-20 md:w-24 whitespace-nowrap text-[11px] md:text-xs">{getDisplayQty(item.item_desc, item.disp_qty, item.unit)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-blue-800 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(pendingDepotReturns).length > 0 && (
+                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
+                  <div className="bg-red-100 border-b-2 border-red-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-red-800 flex justify-between items-center">
+                    <span>Depot Return Requests</span>
+                    <span className="bg-red-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingDepotReturns).length}</span>
+                  </div>
+                  <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
+                    <div className="space-y-3 md:space-y-4">
+                      {Object.entries(pendingDepotReturns).map(([groupId, items]) => (
+                        <div key={groupId} className="border-2 border-red-300 bg-red-50 p-3 md:p-4">
+                          <div className="font-bold text-[13px] md:text-sm text-red-900 mb-1.5 md:mb-2 border-b border-red-200 pb-1">{groupId}</div>
+                          <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-b border-red-200 last:border-0">
+                                  <td className="py-1.5 md:py-2 pr-2 font-medium text-gray-800 uppercase text-[11px] md:text-xs">{item.item_desc}</td>
+                                  <td className="py-1.5 md:py-2 text-right font-bold w-20 md:w-24 whitespace-nowrap text-[11px] md:text-xs">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS RETURN</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(pendingPOs).length > 0 && (
+                <div className="w-full bg-white border-2 border-orange-400 shadow-sm flex flex-col">
+                  <div className="bg-orange-100 border-b-2 border-orange-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-orange-900 flex justify-between items-center">
+                    <span>Backorders / Processing</span>
+                    <span className="bg-orange-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingPOs).length}</span>
+                  </div>
+                  <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
+                    <div className="space-y-3 md:space-y-4">
+                      {Object.entries(pendingPOs).map(([groupId, items]) => (
+                        <div key={groupId} className="border border-orange-300 bg-orange-50 p-2.5 md:p-3">
+                          <div className="font-bold text-[11px] md:text-xs text-orange-900 mb-1.5 md:mb-2 border-b border-orange-200 pb-1">{groupId}</div>
+                          <table className="w-full border-collapse text-[13px] md:text-sm">
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-b border-orange-200 last:border-0">
+                                  <td className="py-1 md:py-1.5 pr-2 font-medium text-gray-700 uppercase text-[11px] md:text-xs">{item.item_desc}</td>
+                                  <td className="py-1 md:py-1.5 text-right font-bold w-20 md:w-24 whitespace-nowrap text-[11px] md:text-xs">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         )}
