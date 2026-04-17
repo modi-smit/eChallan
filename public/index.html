@@ -1,3 +1,12 @@
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "983ab91e-4cd8-4874-b1d1-6c43613c2614",
+    });
+  });
+</script>
 <link rel="manifest" href="/manifest.json" />
 <meta name="theme-color" content="#1f2937" />
 <link rel="apple-touch-icon" href="/pwa-512x512.png" />
