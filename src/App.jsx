@@ -1,11 +1,12 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
+import OneSignal from 'react-onesignal';
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
-// --- AGGRESSIVE AUDIO UNLOCKER ---
+// --- HARDWARE ENGINES (Audio & Haptics) ---
 let globalAudioCtx = null;
 const initAudio = () => {
   if (!globalAudioCtx) {
@@ -34,6 +35,14 @@ const playChime = () => {
   } catch (e) { console.warn("Audio API failed"); }
 };
 
+const triggerHaptic = (pattern = 40) => {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  } catch (e) { /* ignore */ }
+};
+
 let titleInterval;
 const blinkTitle = (msg) => {
   clearInterval(titleInterval);
@@ -48,17 +57,6 @@ const blinkTitle = (msg) => {
     clearInterval(titleInterval);
     document.title = originalTitle;
   }, { once: true });
-};
-
-const triggerSystemAlert = (title, body) => {
-  playChime();
-  blinkTitle(`🔔 ${title}`);
-  
-  if ("Notification" in window && Notification.permission === "granted") {
-    if (document.visibilityState !== 'visible') {
-      new Notification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
-    }
-  }
 };
 
 // --- HYPER-STRICT DATA CLEANERS ---
@@ -90,7 +88,6 @@ export default function App() {
   const [ledgerData, setLedgerData] = useState([]);
   
   const [ledgerLimit, setLedgerLimit] = useState(50);
-  
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
@@ -121,13 +118,28 @@ export default function App() {
   const [incomingDeliveries, setIncomingDeliveries] = useState({});
   const [pendingReturns, setPendingReturns] = useState({});
   const [pendingDepotReturns, setPendingDepotReturns] = useState({});
-  const [isAdminAuth, setIsAdminAuth] = useState(false);
 
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
   const [actionableCount, setActionableCount] = useState(0);
+
+  // --- IN-APP TOAST SYSTEM ---
+  const [toasts, setToasts] = useState([]);
+  
+  const triggerSystemAlert = (title, body, type = 'success') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, title, body, type }]);
+    setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
+
+    if (document.visibilityState !== 'visible') {
+      playChime();
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+      }
+    }
+  };
 
   // Focus Refs
   const depotSearchRef = useRef(null);
@@ -137,13 +149,11 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // NETWORK & AUDIO LISTENERS
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    
     window.addEventListener('click', initAudio, { once: true });
     window.addEventListener('touchstart', initAudio, { once: true });
     window.addEventListener('keydown', initAudio, { once: true });
@@ -154,13 +164,11 @@ export default function App() {
     };
   }, []);
 
-  // QUEUE SYNC
   useEffect(() => {
     localStorage.setItem('god_offline_queue', JSON.stringify(offlineQueue));
     if (isOnline && offlineQueue.length > 0) syncOfflineQueue();
   }, [offlineQueue, isOnline]);
 
-  // SMART DYNAMIC MONTH FILTER
   useEffect(() => {
     if (isOnline && session) {
       const fetchMonths = async () => {
@@ -179,7 +187,6 @@ export default function App() {
     }
   }, [ledgerYear, isOnline, session]);
 
-  // SMART SESSION RESTORATION
   useEffect(() => {
     document.title = "GOD eChallan";
     const initializeAuth = async () => {
@@ -192,10 +199,7 @@ export default function App() {
         } else {
           setLoadingAuth(false);
         }
-      } catch (err) {
-        console.error("Auth Init Error:", err);
-        setLoadingAuth(false); 
-      }
+      } catch (err) { setLoadingAuth(false); }
     };
     
     initializeAuth();
@@ -204,18 +208,19 @@ export default function App() {
       if (event === 'SIGNED_OUT') {
         setSession(null); setUserRole(null); setView(''); setLoadingAuth(false);
       } else if (session) {
-        setSession(session);
-        fetchRole(session.user.id);
+        setSession(session); fetchRole(session.user.id);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // AUTO-FOCUS ENGINE
   useEffect(() => {
-    if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100);
-    if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100);
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) {
+      if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100);
+      if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100);
+    }
   }, [view, depotMode, retailMode]);
 
   async function fetchRole(userId) {
@@ -226,21 +231,18 @@ export default function App() {
         const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
         setUserRole(currentRole);
         fetchAvailableYears();
-
         if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
         else if (currentRole === 'retail') setView('retail'); 
         else if (currentRole === 'depot') setView('depot'); 
         else setView('unassigned'); 
       }
     } catch (err) {
-      console.error("Role Fetch Error:", err);
-    } finally {
-      setLoadingAuth(false); 
-    }
+    } finally { setLoadingAuth(false); }
   }
 
   async function handleLogin(e) {
     e.preventDefault(); 
+    triggerHaptic([30, 50]);
     initAudio(); 
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
@@ -266,9 +268,7 @@ export default function App() {
         const firstYear = new Date(data[0].timestamp).getFullYear();
         const years = []; for (let i = firstYear; i <= currentYear; i++) years.push(i);
         setAvailableYears(years.reverse());
-      } else {
-        setAvailableYears([currentYear]);
-      }
+      } else { setAvailableYears([currentYear]); }
     } catch(e) {}
   };
 
@@ -362,33 +362,39 @@ export default function App() {
   };
 
   const executeTransaction = async (txPayload, alertTitle, alertMsg, onSuccess) => {
+    if (onSuccess) onSuccess(); // Async masking
     if (isOnline) {
       const { error } = await supabase.from('transactions').insert(txPayload);
       if (error) {
          setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
-         triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`);
-      } else { triggerSystemAlert(alertTitle, alertMsg); refreshAllData(); }
+         triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`, 'warning');
+      } else { 
+         triggerSystemAlert(alertTitle, alertMsg, 'success'); 
+         refreshAllData(); 
+      }
     } else {
       setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
-      triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`);
+      triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`, 'warning');
     }
-    if (onSuccess) onSuccess();
   };
 
   const saveAdminNote = async (keyField, keyValue) => {
-    if(!isOnline) { alert("Internet required to save notes."); return; }
+    if(!isOnline) { triggerSystemAlert("Error", "Internet required to save notes.", "error"); return; }
     try {
       const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
-      if (error) throw error; await fetchLedgerData(); setOpenNoteId(null);
-    } catch (error) { alert(`Failed to save note: ${error.message}`); }
+      if (error) throw error; 
+      triggerSystemAlert("Note Saved", "Ledger updated.", "success");
+      await fetchLedgerData(); setOpenNoteId(null);
+    } catch (error) { triggerSystemAlert("Failed", error.message, "error"); }
   };
 
-  // SOFT DELETE IMPLEMENTATION
   const deleteLedgerGroup = async (keyField, keyValue) => {
-    if(!isOnline) { alert("Internet required to delete records."); return; }
+    if(!isOnline) { triggerSystemAlert("Error", "Internet required to delete records.", "error"); return; }
+    triggerHaptic([50, 50, 100]);
     if (window.confirm(`MASTER OVERRIDE: Mark all records for ${keyValue} as DELETED?\n\nThis will zero-out the quantities but keep the Sequence Number visible in the ledger for auditing transparency.`)) {
       const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(keyField, keyValue);
-      if (error) alert(`Deletion Failed: ${error.message}`); else refreshAllData();
+      if (error) triggerSystemAlert("Failed", error.message, "error"); 
+      else { triggerSystemAlert("Deleted", `Record ${keyValue} marked as deleted.`, "success"); refreshAllData(); }
     }
   };
 
@@ -445,7 +451,6 @@ export default function App() {
     }
   };
 
-  // HYPER-STRICT MATH CONVERSION ENGINE
   const getDisplayQty = (desc, qty, rawUnit) => {
     if (!desc) return `0 NOS`;
     let unit = rawUnit;
@@ -481,7 +486,9 @@ export default function App() {
         }
     }
     
-    setTimeout(() => focusRef?.current?.focus(), 50);
+    triggerHaptic(30);
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) setTimeout(() => focusRef?.current?.focus(), 50);
   };
 
   const smartSearch = (query) => {
@@ -508,7 +515,6 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- MULTI-PAGE PDF ENGINE ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
     const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
@@ -600,7 +606,6 @@ export default function App() {
     reader.readAsArrayBuffer(file); 
   };
 
-  // --- LOCAL EXCEL EXPORT (Restored) ---
   const downloadLedger = () => {
     if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
     const dispatchedDataObj = {}; const returnsDataObj = {};
@@ -733,7 +738,7 @@ export default function App() {
         } else if (l.type === 'data') {
             if (l.isFirst) {
                 html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
-                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: nowrap;">${l.challan}</td>`;
+                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.challan}</td>`;
             }
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
             html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
@@ -784,23 +789,16 @@ export default function App() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  // --- QUICK CLEAR & KEYBOARD INTERCEPTOR ---
   const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix, focusRef, currentSelectedItem) => {
-    // 1. DELETE key ALWAYS clears the entire field instantly (Fast UI reset)
     if (e.key === 'Delete') {
-        e.preventDefault();
-        setSelected(null);
-        setSearch('');
-        setUnitState('NOS');
+        e.preventDefault(); triggerHaptic(30);
+        setSelected(null); setSearch(''); setUnitState('NOS');
         if (setDropdownOpen) setDropdownOpen(false);
         return;
     }
-    // 2. BACKSPACE key clears the field ONLY if an item is fully selected (Otherwise it acts as normal backspace)
     if (e.key === 'Backspace' && currentSelectedItem) {
-        e.preventDefault();
-        setSelected(null);
-        setSearch('');
-        setUnitState('NOS');
+        e.preventDefault(); triggerHaptic(30);
+        setSelected(null); setSearch(''); setUnitState('NOS');
         if (setDropdownOpen) setDropdownOpen(false);
         return;
     }
@@ -824,6 +822,7 @@ export default function App() {
     if (e) e.preventDefault();
     if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
     
+    triggerHaptic(40);
     let finalQty = parseInt(retailQty);
     if (finalQty < 0) {
         setRetailMode('RETURN');
@@ -832,7 +831,8 @@ export default function App() {
 
     setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
     setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
-    setTimeout(() => retailSearchRef.current?.focus(), 50); 
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) setTimeout(() => retailSearchRef.current?.focus(), 50); 
   };
   
   const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index].req_qty = val; setRetailCart(updated); };
@@ -840,7 +840,9 @@ export default function App() {
 
   const submitRetailAction = async (e) => {
     if (e) e.preventDefault();
-    if (retailCart.length === 0) return; const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
+    if (retailCart.length === 0) return; 
+    triggerHaptic([40, 40, 100]);
+    const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
     const tx = retailCart.map(item => ({ 
       group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
       unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
@@ -857,6 +859,7 @@ export default function App() {
     if (e) e.preventDefault();
     if (!selectedItem || !qty || parseInt(qty) === 0) return;
     
+    triggerHaptic(40);
     let finalQty = parseInt(qty);
     if (finalQty < 0) {
         setDepotMode('RETURN_REQUEST');
@@ -865,7 +868,8 @@ export default function App() {
 
     setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
     setSearchQuery(''); setQty(''); setSelectedItem(null);
-    setTimeout(() => depotSearchRef.current?.focus(), 50); 
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) setTimeout(() => depotSearchRef.current?.focus(), 50); 
   };
 
   const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index].disp_qty = val; setDepotCart(updated); };
@@ -873,6 +877,7 @@ export default function App() {
 
   const submitDepotAction = async (e) => {
     e.preventDefault(); if (depotCart.length === 0) return;
+    triggerHaptic([40, 40, 100]);
     if (depotMode === 'DISPATCH') {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
@@ -892,24 +897,35 @@ export default function App() {
   };
 
   const openVerifyModal = (challanNo, items) => {
+    triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
     setVerifyModal({ challanNo, items, checks, isDepotReturn: challanNo.startsWith('RT') });
   };
-  const toggleVerifyCheck = (index) => setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
+  const toggleVerifyCheck = (index) => {
+      triggerHaptic(20);
+      setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
+  };
 
   const acceptDelivery = async () => {
     if (!isOnline) { alert("You must be online to verify and accept deliveries."); return; }
-    if (!verifyModal) return; const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
+    if (!verifyModal) return; 
+    triggerHaptic([40, 40, 100]);
+    const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     const { error } = await supabase.from('transactions').update({ status: newStatus }).eq('challan_no', verifyModal.challanNo);
     if (!error) { setVerifyModal(null); refreshAllData(); }
   };
 
-  const openEditPOModal = (groupId, items) => { setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const openEditPOModal = (groupId, items) => { 
+      triggerHaptic(30);
+      setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+  };
   const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { alert("You must be online to process and dispatch Purchase Orders."); return; }
-    if (!editPOModal) return; const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
+    if (!editPOModal) return; 
+    triggerHaptic([40, 40, 100]);
+    const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
     for (const item of editPOModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
       if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
@@ -921,12 +937,17 @@ export default function App() {
     setEditPOModal(null); refreshAllData();
   };
 
-  const openProcessReturnModal = (groupId, items) => { setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const openProcessReturnModal = (groupId, items) => { 
+      triggerHaptic(30);
+      setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+  };
   const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { alert("You must be online to process return requests."); return; }
-    if (!processReturnModal) return; const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
+    if (!processReturnModal) return; 
+    triggerHaptic([40, 40, 100]);
+    const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
     for (const item of processReturnModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
       if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
@@ -938,7 +959,16 @@ export default function App() {
     setProcessReturnModal(null); refreshAllData();
   };
 
-  if (loadingAuth) return <div className="h-screen flex items-center justify-center bg-gray-200 font-bold select-none">LOADING SYSTEM...</div>;
+  // --- ENTERPRISE FIX: SKELETON LOADER ---
+  if (loadingAuth) return (
+    <div className="min-h-screen bg-gray-200 p-3 md:p-4 font-sans flex flex-col gap-4 select-none">
+      <div className="h-14 bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="w-full md:w-1/2 h-[60vh] bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
+        <div className="w-full md:w-1/2 h-[60vh] bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
+      </div>
+    </div>
+  );
   
   if (!session) return (
     <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans select-none">
@@ -946,7 +976,7 @@ export default function App() {
         {!isOnline && <div className="absolute top-0 left-0 w-full bg-red-600 text-white text-center text-[10px] font-black py-0.5">OFFLINE MODE</div>}
         <h2 className="text-2xl font-black text-center mb-6 uppercase border-b-4 border-black pb-2 mt-2">GOD LOGIN</h2>
         <form onSubmit={handleLogin} className="space-y-4">
-          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-3 md:p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text" required />
+          <input type="text" value={workerName} onChange={(e) => setWorkerName(e.target.value)} placeholder="WORKER NAME" className="w-full border-2 border-black p-3 md:p-4 font-bold text-center uppercase focus:bg-yellow-50 outline-none select-text transition-colors" required />
           <button type="submit" disabled={isLoggingIn} className="w-full bg-black text-white py-3 md:py-4 font-bold uppercase border-2 border-black hover:bg-gray-800 active:translate-y-1 transition-all disabled:opacity-50">{isLoggingIn ? 'VERIFYING...' : 'ACCESS DASHBOARD'}</button>
           {loginError && <p className="text-red-600 font-bold text-center text-sm uppercase">{loginError}</p>}
         </form>
@@ -960,6 +990,23 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       
+      {/* --- IN-APP TOAST CONTAINER --- */}
+      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+        {toasts.map(toast => (
+          <div key={toast.id} className={`p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black font-bold uppercase text-sm animate-slide-in flex items-center gap-3 w-72 bg-white text-black`}>
+            <span className="text-xl">{toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : '⚠️'}</span>
+            <div>
+              <div className="text-[11px] text-gray-500 tracking-wider mb-0.5">{toast.title}</div>
+              <div className="leading-tight">{toast.body}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+      `}} />
+
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
           <div className="flex items-center gap-2">
@@ -981,15 +1028,15 @@ export default function App() {
             {userRole && (
               <div className="p-1 flex gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => setView('depot')} className={`px-3 py-1.5 text-xs font-bold ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => setView('retail')} className={`px-3 py-1.5 text-xs font-bold ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => supabase.auth.signOut()} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1010,8 +1057,8 @@ export default function App() {
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setVerifyModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed">CONFIRM MATCH</button>
+                <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black transition-colors">CANCEL</button>
+                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all">CONFIRM MATCH</button>
               </div>
             </div>
           </div>
@@ -1032,8 +1079,8 @@ export default function App() {
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => setEditPOModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase">Generate Challan</button>
+                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all">Generate Challan</button>
               </div>
             </div>
           </div>
@@ -1054,8 +1101,8 @@ export default function App() {
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => setProcessReturnModal(null)} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900">GENERATE RETURN</button>
+                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all">GENERATE RETURN</button>
               </div>
             </div>
           </div>
@@ -1077,7 +1124,7 @@ export default function App() {
               <div className="flex items-center gap-3 md:gap-4">
                 <span className="font-black text-[13px] uppercase">{uploadStatus}</span>
                 {(userRole === 'admin' || userRole === 'master') && (
-                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-3 md:px-4 py-1.5 md:py-2 rounded-sm text-[11px] md:text-[13px] font-bold cursor-pointer">
+                  <label className="bg-gray-200 border border-black hover:bg-gray-300 px-3 md:px-4 py-1.5 md:py-2 rounded-sm text-[11px] md:text-[13px] font-bold cursor-pointer transition-colors">
                     UPDATE EXCEL DB <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
                   </label>
                 )}
@@ -1092,7 +1139,7 @@ export default function App() {
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
                 {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 md:px-5 py-1.5 md:py-2 font-bold text-[11px] md:text-[13px] ml-2">EXPORT EXCEL</button>
+                  <button onClick={downloadLedger} className="bg-blue-800 border-2 border-black hover:bg-blue-900 text-white px-4 md:px-5 py-1.5 md:py-2 font-bold text-[11px] md:text-[13px] ml-2 transition-colors">EXPORT EXCEL</button>
                 )}
               </div>
             </div>
@@ -1126,7 +1173,7 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
-                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 ${group.status === 'DELETED' ? 'bg-gray-200 opacity-60' : group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
+                      <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 transition-colors ${group.status === 'DELETED' ? 'bg-gray-200 opacity-60' : group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
                         <td className="p-2 md:p-3 border-r border-gray-300 text-center font-bold leading-tight">
                           {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[11px] md:text-[13px]">{formatTime(group.timestamp)}</span>
                         </td>
@@ -1172,7 +1219,7 @@ export default function App() {
                                   <div className="flex flex-col items-start gap-1">
                                     <button 
                                       onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                      className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100"
+                                      className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100 transition-colors"
                                     >
                                       {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                     </button>
@@ -1205,7 +1252,7 @@ export default function App() {
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
-                              className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 md:px-2.5 py-1 md:py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none"
+                              className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 md:px-2.5 py-1 md:py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none transition-colors"
                             >
                               PDF
                             </button>
@@ -1237,12 +1284,12 @@ export default function App() {
         {view === 'depot' && (
           <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
             
-            {/* DATA ENTRY SIDE (Left on Desktop, Top on Mobile) */}
+            {/* DATA ENTRY SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
-                  <button onClick={() => setDepotMode('DISPATCH')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
-                  <button onClick={() => setDepotMode('RETURN_REQUEST')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
+                  <button onClick={() => { triggerHaptic(30); setDepotMode('DISPATCH'); }} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm transition-colors ${depotMode === 'DISPATCH' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>DISPATCH GOODS</button>
+                  <button onClick={() => { triggerHaptic(30); setDepotMode('RETURN_REQUEST'); }} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm transition-colors ${depotMode === 'RETURN_REQUEST' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>REQUEST RETURN</button>
                 </div>
               </div>
 
@@ -1250,17 +1297,17 @@ export default function App() {
                 <div className="flex flex-col space-y-3 md:space-y-4">
                   <div className="relative">
                     <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">SEARCH ITEM / SKU</label>
-                    <input ref={depotSearchRef} type="text" value={searchQuery} onBlur={() => setTimeout(() => setIsDepotDropdownOpen(false), 200)} onFocus={() => { if(searchQuery.length > 0) setIsDepotDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, setIsDepotDropdownOpen, setSelectedUnit, 'depot-item', depotQtyRef, selectedItem)} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setIsDepotDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
+                    <input ref={depotSearchRef} type="text" value={searchQuery} onBlur={() => setTimeout(() => setIsDepotDropdownOpen(false), 200)} onFocus={() => { if(searchQuery.length > 0) setIsDepotDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, depotFilteredItems, setSelectedItem, setSearchQuery, setIsDepotDropdownOpen, setSelectedUnit, 'depot-item', depotQtyRef, selectedItem)} onChange={(e) => { setSearchQuery(e.target.value); setSelectedItem(null); setIsDepotDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text transition-colors" placeholder="TYPE TO SEARCH..." />
                     {searchQuery.length > 0 && isDepotDropdownOpen && depotFilteredItems.length > 0 && !selectedItem && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-[13px] md:text-sm font-bold">
-                        {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, setIsDepotDropdownOpen, searchQuery, depotQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
+                        {depotFilteredItems.map((item, i) => <div id={`depot-item-${i}`} key={i} onClick={() => handleItemSelect(item, setSelectedItem, setSelectedUnit, setSearchQuery, setIsDepotDropdownOpen, searchQuery, depotQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase transition-colors ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
                       </div>
                     )}
                   </div>
                   <div className="flex gap-3 md:gap-4">
                     <div className="flex-1">
                       <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">QTY</label>
-                      <input ref={depotQtyRef} type="number" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={(e) => { if(e.key==='Enter') addToDepotCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
+                      <input ref={depotQtyRef} type="number" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={(e) => { if(e.key==='Enter') addToDepotCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text transition-colors" placeholder="0" />
                     </div>
                     <div className="w-28 md:w-32">
                       <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">UNIT</label>
@@ -1270,7 +1317,7 @@ export default function App() {
                              const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
                              learnedUnits[normalizeString(selectedItem.description)] = e.target.value;
                              localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
-                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text">
+                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text transition-colors">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
@@ -1278,14 +1325,14 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black">
+                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all">
                     + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* CART & INBOX SIDE (Right on Desktop, Bottom on Mobile) */}
+            {/* CART & INBOX SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
               
               {/* THE CART */}
@@ -1294,14 +1341,14 @@ export default function App() {
                   <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
                     <tbody>
                       {depotCart.map((item, idx) => (
-                        <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-50' : 'border-blue-200 hover:bg-blue-50'} last:border-0`}>
+                        <tr key={idx} className={`border-b ${depotMode === 'RETURN_REQUEST' ? 'border-red-200 hover:bg-red-50' : 'border-blue-200 hover:bg-blue-50'} last:border-0 transition-colors`}>
                           <td className="py-2 md:py-2.5 flex items-center gap-2 md:gap-3">
-                            <button onClick={() => removeDepotCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <button onClick={() => { triggerHaptic(30); removeDepotCartItem(idx); }} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm transition-colors">✕</button>
                             <span className="font-bold text-gray-900 uppercase select-text text-[13px] md:text-sm">{item.description}</span>
                           </td>
                           <td className="py-2 md:py-2.5 text-right w-40 md:w-48 whitespace-nowrap select-text">
                             <div className="flex items-center justify-end gap-1.5 md:gap-2">
-                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <input type="number" value={item.disp_qty} onChange={(e) => updateDepotCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400 focus:border-red-600' : 'border-blue-400 focus:border-blue-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text transition-colors`} />
                               <span className={`font-normal text-[11px] md:text-[13px] ${depotMode === 'RETURN_REQUEST' ? 'text-red-900' : 'text-blue-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
@@ -1310,15 +1357,15 @@ export default function App() {
                     </tbody>
                   </table>
                   {depotMode === 'RETURN_REQUEST' && (
-                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text" />
+                    <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text transition-colors" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
                     {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
                 </div>
               )}
 
-              {/* INBOXES (Stacked Below Cart) */}
+              {/* INBOXES */}
               {!hasDepotInbox && depotCart.length === 0 && (
                 <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
                   NO PENDING INBOX TASKS
@@ -1326,7 +1373,7 @@ export default function App() {
               )}
 
               {Object.keys(pendingPOs).length > 0 && (
-                <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
+                <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col transition-all">
                   <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-gray-800 flex justify-between items-center">
                     <span>Pending PO Inbox</span>
                     <span className="bg-gray-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingPOs).length}</span>
@@ -1334,7 +1381,7 @@ export default function App() {
                   <div className="p-3 md:p-4 max-h-[40vh] overflow-y-auto">
                     <div className="space-y-3 md:space-y-4">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-3 md:p-4">
+                        <div key={groupId} className="border-2 border-gray-300 bg-gray-50 p-3 md:p-4 hover:border-gray-400 transition-colors">
                           <div className="font-bold text-[11px] md:text-[13px] mb-2 md:mb-3 text-gray-600 border-b border-gray-200 pb-1 md:pb-1.5">{groupId}</div>
                           <table className="w-full mb-3 md:mb-4 border-collapse text-[13px] md:text-sm">
                             <tbody>
@@ -1346,7 +1393,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-slate-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">REVIEW & DISPATCH</button>
+                          <button onClick={() => openEditPOModal(groupId, items)} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-slate-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all">REVIEW & DISPATCH</button>
                         </div>
                       ))}
                     </div>
@@ -1355,7 +1402,7 @@ export default function App() {
               )}
 
               {Object.keys(pendingReturns).length > 0 && (
-                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
+                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col transition-all">
                   <div className="bg-red-100 border-b-2 border-red-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-red-800 flex justify-between items-center">
                     <span>Incoming Returns</span>
                     <span className="bg-red-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingReturns).length}</span>
@@ -1363,12 +1410,12 @@ export default function App() {
                   <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
                     <div className="space-y-3 md:space-y-4">
                       {Object.entries(pendingReturns).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-3 md:p-4">
-                          <div className="flex justify-between items-center mb-3 md:mb-4 border-b-2 border-red-200 pb-1.5 md:pb-2">
-                            <span className="font-bold text-[13px] md:text-sm text-red-900 select-text">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-gray-100">VIEW DOC</button>
+                        <div key={challanNo} className="border-2 border-red-300 bg-red-50 p-3 md:p-4 hover:border-red-400 transition-colors">
+                          <div className="flex justify-between items-center mb-4 border-b-2 border-red-200 pb-2">
+                            <span className="font-bold text-sm text-red-900 select-text">{challanNo}</span>
+                            <button onClick={() => { triggerHaptic(30); printPDF(challanNo, items); }} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-gray-100 transition-colors">VIEW DOC</button>
                           </div>
-                          <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
+                          <table className="w-full mb-3 border-collapse text-[13px] md:text-sm">
                             <tbody>
                               {items.map((item, idx) => (
                                 <tr key={idx} className="border-b border-red-200 last:border-0">
@@ -1378,7 +1425,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">VERIFY & ACCEPT</button>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all">VERIFY & ACCEPT</button>
                         </div>
                       ))}
                     </div>
@@ -1393,12 +1440,12 @@ export default function App() {
         {view === 'retail' && (
           <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
             
-            {/* DATA ENTRY SIDE (Left on Desktop, Top on Mobile) */}
+            {/* DATA ENTRY SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
-                  <button onClick={() => setRetailMode('PO')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
-                  <button onClick={() => setRetailMode('RETURN')} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
+                  <button onClick={() => { triggerHaptic(30); setRetailMode('PO'); }} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm transition-colors ${retailMode === 'PO' ? 'bg-white border-black text-black' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>ORDER GOODS</button>
+                  <button onClick={() => { triggerHaptic(30); setRetailMode('RETURN'); }} className={`flex-1 py-1 md:py-1.5 rounded-sm border shadow-sm transition-colors ${retailMode === 'RETURN' ? 'bg-red-50 border-red-500 text-red-800' : 'bg-gray-200 border-gray-400 text-gray-500 hover:bg-gray-300'}`}>RETURN GOODS</button>
                 </div>
               </div>
 
@@ -1406,17 +1453,17 @@ export default function App() {
                 <div className="flex flex-col space-y-3 md:space-y-4">
                   <div className="relative">
                     <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">SEARCH ITEM / SKU</label>
-                    <input ref={retailSearchRef} type="text" value={retailSearch} onBlur={() => setTimeout(() => setIsRetailDropdownOpen(false), 200)} onFocus={() => { if (retailSearch.length > 0) setIsRetailDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item', retailQtyRef, retailSelectedItem)} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="TYPE TO SEARCH..." />
+                    <input ref={retailSearchRef} type="text" value={retailSearch} onBlur={() => setTimeout(() => setIsRetailDropdownOpen(false), 200)} onFocus={() => { if (retailSearch.length > 0) setIsRetailDropdownOpen(true); }} onKeyDown={(e) => handleKeyDown(e, retailFilteredItems, setRetailSelectedItem, setRetailSearch, setIsRetailDropdownOpen, setRetailSelectedUnit, 'retail-item', retailQtyRef, retailSelectedItem)} onChange={(e) => { setRetailSearch(e.target.value); setRetailSelectedItem(null); setIsRetailDropdownOpen(true); setHighlightIndex(-1); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text transition-colors" placeholder="TYPE TO SEARCH..." />
                     {retailSearch.length > 0 && isRetailDropdownOpen && (
                       <div className="absolute z-10 w-full max-h-56 overflow-y-auto bg-white border-2 border-gray-400 mt-1 shadow-xl text-[13px] md:text-sm font-bold">
-                        {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen, retailSearch, retailQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
+                        {retailFilteredItems.map((item, i) => <div id={`retail-item-${i}`} key={i} onClick={() => handleItemSelect(item, setRetailSelectedItem, setRetailSelectedUnit, setRetailSearch, setIsRetailDropdownOpen, retailSearch, retailQtyRef)} className={`p-2.5 md:p-3 cursor-pointer border-b border-gray-200 uppercase transition-colors ${highlightIndex === i ? 'bg-gray-800 text-white' : 'hover:bg-gray-100'}`}><span className="text-[9px] md:text-[10px] font-bold text-gray-500 mr-2">[{item.category}{item.sku ? ` | ${item.sku}` : ''}]</span>{item.description}</div>)}
                       </div>
                     )}
                   </div>
                   <div className="flex gap-3 md:gap-4">
                     <div className="flex-1">
                       <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">QTY</label>
-                      <input ref={retailQtyRef} type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') addToRetailCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text" placeholder="0" />
+                      <input ref={retailQtyRef} type="number" value={retailQty} onChange={(e) => setRetailQty(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter') addToRetailCart(e); }} className="w-full border-2 border-gray-400 p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-black focus:bg-yellow-50 select-text transition-colors" placeholder="0" />
                     </div>
                     <div className="w-28 md:w-32">
                       <label className="block text-[11px] md:text-[13px] font-bold text-gray-700 mb-1 md:mb-1.5">UNIT</label>
@@ -1426,7 +1473,7 @@ export default function App() {
                              const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
                              learnedUnits[normalizeString(retailSelectedItem.description)] = e.target.value;
                              localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
-                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text">
+                           }} className="w-full border-2 border-gray-400 p-2 md:p-3 bg-white text-[13px] md:text-sm font-bold focus:outline-none cursor-pointer select-text transition-colors">
                             <option value="PCS">PCS</option><option value="SET">SET</option>
                          </select>
                       ) : (
@@ -1434,14 +1481,14 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black`}>
+                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* CART & INBOX SIDE (Right on Desktop, Bottom on Mobile) */}
+            {/* CART & INBOX SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
               
               {/* THE CART */}
@@ -1450,14 +1497,14 @@ export default function App() {
                   <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
                     <tbody>
                       {retailCart.map((item, idx) => (
-                        <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-slate-200 hover:bg-slate-50'} last:border-0`}>
+                        <tr key={idx} className={`border-b ${retailMode === 'RETURN' ? 'border-red-200 hover:bg-red-50' : 'border-slate-200 hover:bg-slate-50'} last:border-0 transition-colors`}>
                           <td className="py-2 md:py-2.5 flex items-center gap-2 md:gap-3">
-                            <button onClick={() => removeRetailCartItem(idx)} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm">✕</button>
+                            <button onClick={() => { triggerHaptic(30); removeRetailCartItem(idx); }} className="text-red-600 bg-white border border-red-300 font-bold px-2 py-0.5 md:px-2.5 md:py-1 hover:bg-red-100 rounded shadow-sm transition-colors">✕</button>
                             <span className="font-bold text-gray-900 uppercase select-text text-[13px] md:text-sm">{item.description}</span>
                           </td>
                           <td className="py-2 md:py-2.5 text-right w-40 md:w-48 whitespace-nowrap select-text">
                              <div className="flex items-center justify-end gap-1.5 md:gap-2">
-                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-slate-400 focus:border-slate-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text`} />
+                              <input type="number" value={item.req_qty} onChange={(e) => updateRetailCartQty(idx, e.target.value)} className={`w-16 md:w-20 border-2 ${retailMode === 'RETURN' ? 'border-red-400 focus:border-red-600' : 'border-slate-400 focus:border-slate-600'} p-1 md:p-1.5 text-center font-bold focus:outline-none focus:bg-yellow-50 select-text transition-colors`} />
                               <span className={`font-normal text-[11px] md:text-[13px] ${retailMode === 'RETURN' ? 'text-red-900' : 'text-slate-900'}`}>{item.unit || getUnit(item.description)}</span>
                             </div>
                           </td>
@@ -1466,15 +1513,15 @@ export default function App() {
                     </tbody>
                   </table>
                   {retailMode === 'RETURN' && (
-                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text" />
+                    <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text transition-colors" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-slate-800 hover:bg-slate-900 border-slate-900'}`}>
+                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-slate-800 hover:bg-slate-900 border-slate-900'}`}>
                     {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
               )}
 
-              {/* INBOXES (Stacked Below Cart) */}
+              {/* INBOXES */}
               {!hasRetailInbox && retailCart.length === 0 && (
                 <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
                   NO PENDING INBOX TASKS
@@ -1482,7 +1529,7 @@ export default function App() {
               )}
 
               {Object.keys(incomingDeliveries).length > 0 && (
-                <div className="w-full bg-white border-2 border-blue-500 shadow-sm flex flex-col">
+                <div className="w-full bg-white border-2 border-blue-500 shadow-sm flex flex-col transition-all">
                   <div className="bg-blue-600 border-b-2 border-blue-700 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-white flex justify-between items-center">
                     <span>Incoming Deliveries</span>
                     <span className="bg-white text-blue-800 px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none shadow-sm">{Object.keys(incomingDeliveries).length}</span>
@@ -1490,10 +1537,10 @@ export default function App() {
                   <div className="p-3 md:p-4 max-h-[40vh] overflow-y-auto">
                     <div className="space-y-3 md:space-y-4">
                       {Object.entries(incomingDeliveries).map(([challanNo, items]) => (
-                        <div key={challanNo} className="border-2 border-blue-300 bg-blue-50 p-3 md:p-4">
+                        <div key={challanNo} className="border-2 border-blue-300 bg-blue-50 p-3 md:p-4 hover:border-blue-400 transition-colors">
                           <div className="flex justify-between items-center mb-2 md:mb-3 border-b border-blue-200 pb-1.5 md:pb-2">
                             <span className="font-bold text-[13px] md:text-sm text-blue-900">{challanNo}</span>
-                            <button onClick={() => printPDF(challanNo, items)} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-blue-100 text-blue-900">VIEW DOC</button>
+                            <button onClick={() => { triggerHaptic(30); printPDF(challanNo, items); }} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 px-2 md:px-3 py-1 md:py-1.5 shadow-sm hover:bg-blue-100 text-blue-900 transition-colors">VIEW DOC</button>
                           </div>
                           <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
                             <tbody>
@@ -1505,7 +1552,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-blue-800 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">START VERIFICATION</button>
+                          <button onClick={() => openVerifyModal(challanNo, items)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-blue-800 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all">START VERIFICATION</button>
                         </div>
                       ))}
                     </div>
@@ -1514,7 +1561,7 @@ export default function App() {
               )}
 
               {Object.keys(pendingDepotReturns).length > 0 && (
-                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col">
+                <div className="w-full bg-white border-2 border-red-400 shadow-sm flex flex-col transition-all">
                   <div className="bg-red-100 border-b-2 border-red-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-red-800 flex justify-between items-center">
                     <span>Depot Return Requests</span>
                     <span className="bg-red-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingDepotReturns).length}</span>
@@ -1522,7 +1569,7 @@ export default function App() {
                   <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
                     <div className="space-y-3 md:space-y-4">
                       {Object.entries(pendingDepotReturns).map(([groupId, items]) => (
-                        <div key={groupId} className="border-2 border-red-300 bg-red-50 p-3 md:p-4">
+                        <div key={groupId} className="border-2 border-red-300 bg-red-50 p-3 md:p-4 hover:border-red-400 transition-colors">
                           <div className="font-bold text-[13px] md:text-sm text-red-900 mb-1.5 md:mb-2 border-b border-red-200 pb-1">{groupId}</div>
                           <table className="w-full mb-2 md:mb-3 border-collapse text-[13px] md:text-sm">
                             <tbody>
@@ -1534,7 +1581,7 @@ export default function App() {
                               ))}
                             </tbody>
                           </table>
-                          <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none">PROCESS RETURN</button>
+                          <button onClick={() => openProcessReturnModal(groupId, items)} className="w-full bg-red-700 hover:bg-red-800 text-white font-bold text-[11px] md:text-[13px] py-2 md:py-2.5 border-2 border-red-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all">PROCESS RETURN</button>
                         </div>
                       ))}
                     </div>
@@ -1543,7 +1590,7 @@ export default function App() {
               )}
 
               {Object.keys(pendingPOs).length > 0 && (
-                <div className="w-full bg-white border-2 border-orange-400 shadow-sm flex flex-col">
+                <div className="w-full bg-white border-2 border-orange-400 shadow-sm flex flex-col transition-all">
                   <div className="bg-orange-100 border-b-2 border-orange-400 px-3 md:px-4 py-2 md:py-2.5 font-bold text-[13px] md:text-sm uppercase text-orange-900 flex justify-between items-center">
                     <span>Backorders / Processing</span>
                     <span className="bg-orange-800 text-white px-2 md:px-2.5 py-0.5 rounded text-[11px] md:text-xs leading-none">{Object.keys(pendingPOs).length}</span>
@@ -1551,7 +1598,7 @@ export default function App() {
                   <div className="p-3 md:p-4 max-h-[30vh] overflow-y-auto">
                     <div className="space-y-3 md:space-y-4">
                       {Object.entries(pendingPOs).map(([groupId, items]) => (
-                        <div key={groupId} className="border border-orange-300 bg-orange-50 p-2.5 md:p-3">
+                        <div key={groupId} className="border border-orange-300 bg-orange-50 p-2.5 md:p-3 hover:border-orange-400 transition-colors">
                           <div className="font-bold text-[11px] md:text-xs text-orange-900 mb-1.5 md:mb-2 border-b border-orange-200 pb-1">{groupId}</div>
                           <table className="w-full border-collapse text-[13px] md:text-sm">
                             <tbody>

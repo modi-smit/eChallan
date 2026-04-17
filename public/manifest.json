@@ -1,0 +1,17 @@
+{
+  "short_name": "GOD eChallan",
+  "name": "Gujarat Oil Depot",
+  "icons": [
+    {
+      "src": "/pwa-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#e5e7eb",
+  "display": "standalone",
+  "theme_color": "#1f2937",
+  "orientation": "portrait-primary"
+}
