@@ -224,21 +224,39 @@ export default function App() {
   }, [view, depotMode, retailMode]);
 
   async function fetchRole(userId) {
-    try {
-      const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
-      if (error) throw error;
-      if (data) {
-        const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
-        setUserRole(currentRole);
-        fetchAvailableYears();
-        if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
-        else if (currentRole === 'retail') setView('retail'); 
-        else if (currentRole === 'depot') setView('depot'); 
-        else setView('unassigned'); 
-      }
-    } catch (err) {
-    } finally { setLoadingAuth(false); }
+  try {
+    const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
+    if (error) throw error;
+    if (data) {
+      const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
+      setUserRole(currentRole);
+      fetchAvailableYears();
+
+      // --- ONESIGNAL INITIALIZATION ---
+      try {
+        await OneSignal.init({
+          appId: "YOUR_ONESIGNAL_APP_ID_HERE", // Paste your App ID here
+          notifyButton: { enable: false }, // We handle the prompt manually
+          allowLocalhostAsSecureOrigin: true
+        });
+        // Ask the worker for permission on their phone
+        OneSignal.Slidedown.promptPush();
+        // Tag this specific phone with their role (so we don't send Depot alerts to Retail)
+        OneSignal.User.addTag("role", currentRole);
+      } catch (e) { console.error("OneSignal Init Error", e); }
+      // --------------------------------
+
+      if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
+      else if (currentRole === 'retail') setView('retail'); 
+      else if (currentRole === 'depot') setView('depot'); 
+      else setView('unassigned'); 
+    }
+  } catch (err) {
+    console.error("Role Fetch Error:", err);
+  } finally {
+    setLoadingAuth(false); 
   }
+}
 
   async function handleLogin(e) {
     e.preventDefault(); 
@@ -1012,7 +1030,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <div className="relative flex items-center">
               <span className="tracking-widest">Gujarat Oil Depot</span>
-              <a href="https://script.google.com/macros/s/AKfycbx2iDkE7rw_qq9vAG7d7ezQ8Ci7F8TLdD9S-TS5c8wDYaeUTkixccjXaD0oSp0Th1t4cQ/exec" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
+              <a href="YOUR_GOOGLE_WEB_APP_URL_HERE" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
               {actionableCount > 0 && (
                 <span className="absolute -top-1 -right-3 flex h-3 w-3">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
