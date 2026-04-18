@@ -98,6 +98,7 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
+  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -156,11 +157,10 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // Watchdog Timeout (Faster, cleaner load state)
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 3500);
+    }, 3000);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -272,7 +272,7 @@ export default function App() {
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
-            appId: "YOUR_ONESIGNAL_APP_ID_HERE", // <-- Ensure your App ID is here
+            appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
             safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
             notifyButton: { enable: true },
           });
@@ -425,46 +425,55 @@ export default function App() {
     setIsProcessing(true);
     triggerHaptic([50, 50, 100]);
     
-    if (type === 'SOFT') {
-      const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue);
-      if (error) triggerSystemAlert("Failed", error.message, "error"); 
-      else triggerSystemAlert("Voided", `Record ${deleteModal.keyValue} marked as deleted.`, "success");
-    } else {
-      const { error } = await supabase.from('transactions').delete().eq(deleteModal.keyField, deleteModal.keyValue);
-      if (error) triggerSystemAlert("Failed", error.message, "error"); 
-      else triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success");
+    try {
+        if (type === 'SOFT') {
+          const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue);
+          if (error) throw error;
+          triggerSystemAlert("Voided", `Record ${deleteModal.keyValue} marked as deleted.`, "success");
+        } else {
+          const { error } = await supabase.from('transactions').delete().eq(deleteModal.keyField, deleteModal.keyValue);
+          if (error) throw error;
+          triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success");
+        }
+        setDeleteModal(null);
+        refreshAllData();
+    } catch(err) {
+        triggerSystemAlert("Failed", err.message, "error"); 
+    } finally {
+        setIsProcessing(false);
     }
-    
-    setIsProcessing(false);
-    setDeleteModal(null);
-    refreshAllData();
   };
 
+  // --- MASTER EDIT SYSTEM ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
-    setIsProcessing(true); triggerHaptic([40, 40, 100]);
+    setIsProcessing(true); 
+    triggerHaptic([40, 40, 100]);
 
-    for (const item of masterEditModal.items) {
-      const newQty = parseInt(item.edit_qty) || 0;
-      
-      if (newQty === 0) {
-          // Zero-QTY hard cull
-          await supabase.from('transactions').delete().eq('id', item.id);
-      } else {
-          const updatePayload = { 
-              item_desc: cleanDesc(item.item_desc),
-              unit: getUnit(item.item_desc) 
-          };
-          if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
-          if (item.req_qty !== null) updatePayload.req_qty = newQty;
-          await supabase.from('transactions').update(updatePayload).eq('id', item.id);
-      }
+    try {
+        for (const item of masterEditModal.items) {
+          const newQty = parseInt(item.edit_qty) || 0;
+          
+          if (newQty === 0) {
+              await supabase.from('transactions').delete().eq('id', item.id);
+          } else {
+              const updatePayload = { 
+                  item_desc: cleanDesc(item.item_desc),
+                  unit: getUnit(item.item_desc) 
+              };
+              if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
+              if (item.req_qty !== null) updatePayload.req_qty = newQty;
+              await supabase.from('transactions').update(updatePayload).eq('id', item.id);
+          }
+        }
+        setMasterEditModal(null);
+        triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.keyValue}`, "success");
+        refreshAllData();
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error"); 
+    } finally {
+        setIsProcessing(false);
     }
-
-    setIsProcessing(false);
-    setMasterEditModal(null);
-    triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.keyValue}`, "success");
-    refreshAllData();
   };
 
   const saveSettings = (e) => {
@@ -600,22 +609,25 @@ export default function App() {
     let totalNos = 0;
     
     const drawPageTemplate = () => {
+        doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.4);
         
-        // Master Outer Box
-        doc.rect(5, 5, 138, 195); 
+        // Master Outer Box (Drawn unconditionally on every page)
+        doc.rect(5, 5, 138, 195, 'S'); 
 
         // Header Background
         doc.setFillColor(235, 235, 235); 
-        doc.rect(5, 5, 138, 16, 'F'); 
+        doc.rect(5.2, 5.2, 137.6, 15.6, 'F'); 
         
         // Header Text
+        doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         
         // Header Bottom Line
+        doc.setDrawColor(0, 0, 0);
         doc.line(5, 21, 143, 21); 
         
         // Metadata Text
@@ -626,9 +638,10 @@ export default function App() {
         
         // Table Header Area
         doc.setFillColor(245, 245, 245); 
-        doc.rect(5, 41, 138, 7, 'F'); 
+        doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
         
         // Table Header Lines
+        doc.setDrawColor(0, 0, 0);
         doc.line(5, 41, 143, 41); 
         doc.line(5, 48, 143, 48); 
         
@@ -639,9 +652,9 @@ export default function App() {
         doc.line(125, 41, 125, gridEndY); // NOS line
         doc.line(5, gridEndY, 143, gridEndY); // Bottom of items boundary
 
-        // Total Box & Signature Grid setup
-        doc.rect(5, 175, 138, 7); // Total Box Outline
-        doc.line(105, 175, 105, 182); // Extend description line down through Total box
+        // Total Box Outline
+        doc.rect(5, 175, 138, 7, 'S'); 
+        doc.line(105, 175, 105, 182); 
 
         // Table Column Labels
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
@@ -654,7 +667,7 @@ export default function App() {
 
     drawPageTemplate();
     let y = 53;
-    const maxY = 173; // Threshold before creating a new page
+    const maxY = 173; 
 
     itemsList.forEach((item, index) => {
       const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 85); 
@@ -675,18 +688,18 @@ export default function App() {
       doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
-      // Light gray row divider for readability (doesn't overwrite outer border)
       if (index < itemsList.length - 1) { 
         doc.setLineWidth(0.1); 
         doc.setDrawColor(200, 200, 200); 
         doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
-        doc.setDrawColor(0, 0, 0); // Reset stroke to black
+        doc.setDrawColor(0, 0, 0); 
       }
       y += rowHeight + 2; 
     });
 
-    // Populate TOTAL Box
-    doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 137.6, 6.6, 'F');
+    // Populate TOTAL Box ONLY on the very last page
+    doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 99.6, 6.6, 'F');
+    doc.rect(105.2, 175.2, 37.6, 6.6, 'F');
     doc.setFont("helvetica", "bold");
     doc.text("TOTAL", 100, 180, { align: "right" }); 
     doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
@@ -702,7 +715,7 @@ export default function App() {
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     
-    // PAGINATION LOGIC (Page 1 of X)
+    // PAGINATION LOGIC (Page X of Y)
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
@@ -972,7 +985,7 @@ export default function App() {
     if (isDesktop) setTimeout(() => retailSearchRef.current?.focus(), 50); 
   };
   
-  const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index].req_qty = val; setRetailCart(updated); };
+  const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index] = { ...updated[index], req_qty: val }; setRetailCart(updated); };
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
   const submitRetailAction = async (e) => {
@@ -982,17 +995,22 @@ export default function App() {
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
     
-    const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
-    const tx = retailCart.map(item => ({ 
-      group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
-      unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
-      challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
-    }));
-    
-    executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
-      setRetailCart([]); setRetailReturnNote('');
-      setIsProcessing(false);
-    });
+    try {
+        const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
+        const tx = retailCart.map(item => ({ 
+          group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
+          unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
+          challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
+        }));
+        
+        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
+          setRetailCart([]); setRetailReturnNote('');
+        });
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
@@ -1014,7 +1032,7 @@ export default function App() {
     if (isDesktop) setTimeout(() => depotSearchRef.current?.focus(), 50); 
   };
 
-  const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index].disp_qty = val; setDepotCart(updated); };
+  const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index] = { ...updated[index], disp_qty: val }; setDepotCart(updated); };
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
   const submitDepotAction = async (e) => {
@@ -1024,23 +1042,27 @@ export default function App() {
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
 
-    if (depotMode === 'DISPATCH') {
-      const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
-      const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-      executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
-        printPDF(challanNo, depotCart); setDepotCart([]); 
+    try {
+        if (depotMode === 'DISPATCH') {
+          const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
+          const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
+          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
+            printPDF(challanNo, depotCart); setDepotCart([]); 
+          });
+        } else {
+          const groupId = await getNextSequence('RR');
+          const tx = depotCart.map(item => ({ 
+            group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
+            unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
+          }));
+          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
+            setDepotCart([]); setDepotReturnNote('');
+          });
+        }
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
         setIsProcessing(false);
-      });
-    } else {
-      const groupId = await getNextSequence('RR');
-      const tx = depotCart.map(item => ({ 
-        group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
-        unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
-      }));
-      executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
-        setDepotCart([]); setDepotReturnNote('');
-        setIsProcessing(false);
-      });
     }
   };
 
@@ -1065,7 +1087,6 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // Ensure at least one item is checked before processing
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
         triggerSystemAlert("Action Required", "Please select at least one item to verify.", "warning");
@@ -1074,20 +1095,24 @@ export default function App() {
 
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
-    const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     
-    const promises = checkedIndexes.map(async (index) => {
-        const item = verifyModal.items[index];
-        const finalQty = parseInt(item.edit_qty) || 0;
-        return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
-    });
+    try {
+        const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
+        const promises = checkedIndexes.map(async (index) => {
+            const item = verifyModal.items[index];
+            const finalQty = parseInt(item.edit_qty) || 0;
+            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
+        });
 
-    await Promise.all(promises);
-    
-    setIsProcessing(false);
-    setVerifyModal(null); 
-    refreshAllData();
-    triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
+        await Promise.all(promises);
+        setVerifyModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
+    } catch (err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   // --- REBUILT DISPATCH PO LOGIC ---
@@ -1095,7 +1120,7 @@ export default function App() {
       triggerHaptic(30);
       setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated }); };
+  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
@@ -1104,42 +1129,47 @@ export default function App() {
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
     
-    const challanNo = await getNextSequence('CN'); 
-    const backorders = []; 
-    const printItems = [];
+    try {
+        const challanNo = await getNextSequence('CN'); 
+        const backorders = []; 
+        const printItems = [];
 
-    for (const item of editPOModal.items) {
-      const dispatchQty = parseInt(item.edit_qty) || 0; 
-      const reqQty = parseInt(item.req_qty);
+        for (const item of editPOModal.items) {
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
 
-      if (dispatchQty === 0) { 
-          await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); 
-          continue; 
-      }
-      if (dispatchQty > 0) { 
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); 
+              continue; 
+          }
+          
           await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
-      }
-      if (dispatchQty < reqQty) { 
-          const newPO = await getNextSequence('PO'); 
-          backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
-      }
-    }
+          
+          if (dispatchQty < reqQty) { 
+              const newPO = await getNextSequence('PO'); 
+              backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
+          }
+        }
 
-    if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
-    if (printItems.length > 0) printPDF(challanNo, printItems);
-    
-    setIsProcessing(false);
-    setEditPOModal(null); 
-    refreshAllData();
-    triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+        if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
+        if (printItems.length > 0) printPDF(challanNo, printItems);
+        
+        setEditPOModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const openProcessReturnModal = (groupId, items) => { 
       triggerHaptic(30);
       setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated }); };
+  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
@@ -1148,22 +1178,27 @@ export default function App() {
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
     
-    const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
-    for (const item of processReturnModal.items) {
-      const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
-      if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
-      if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
-      if (dispatchQty < reqQty) { const newRR = await getNextSequence('RR'); backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); }
+    try {
+        const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
+        for (const item of processReturnModal.items) {
+          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
+          if (dispatchQty <= 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
+          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); 
+          if (dispatchQty < reqQty) { const newRR = await getNextSequence('RR'); backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); }
+        }
+        if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
+        if (printItems.length > 0) printPDF(challanNo, printItems);
+        
+        setProcessReturnModal(null); 
+        refreshAllData();
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
     }
-    if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
-    if (printItems.length > 0) printPDF(challanNo, printItems);
-    
-    setIsProcessing(false);
-    setProcessReturnModal(null); 
-    refreshAllData();
   };
 
-  // --- FAST UI INITIALIZATION ---
+  // --- CLEAN, FAST INITIALIZATION SCREEN ---
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
@@ -1189,9 +1224,6 @@ export default function App() {
 
   const hasRetailInbox = Object.keys(incomingDeliveries).length > 0 || Object.keys(pendingDepotReturns).length > 0 || Object.keys(pendingPOs).length > 0;
   const hasDepotInbox = Object.keys(pendingPOs).length > 0 || Object.keys(pendingReturns).length > 0;
-
-  // Check if any verify boxes are checked to enable the button
-  const anyVerifyChecked = verifyModal ? Object.values(verifyModal.checks).some(Boolean) : false;
 
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
@@ -1258,15 +1290,19 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
               
-              <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
                   <div key={idx} className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 bg-gray-100 border border-gray-300 p-2">
                     <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
-                        const updated = [...masterEditModal.items]; updated[idx].item_desc = e.target.value; setMasterEditModal({...masterEditModal, items: updated});
+                        const updated = [...masterEditModal.items]; 
+                        updated[idx] = { ...updated[idx], item_desc: e.target.value }; 
+                        setMasterEditModal({...masterEditModal, items: updated});
                     }} className="flex-1 text-[13px] md:text-sm p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
                     <input type="number" value={item.edit_qty} onChange={(e) => {
-                        const updated = [...masterEditModal.items]; updated[idx].edit_qty = e.target.value; setMasterEditModal({...masterEditModal, items: updated});
+                        const updated = [...masterEditModal.items]; 
+                        updated[idx] = { ...updated[idx], edit_qty: e.target.value }; 
+                        setMasterEditModal({...masterEditModal, items: updated});
                     }} className="w-full md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
@@ -1282,44 +1318,43 @@ export default function App() {
         </div>
       )}
 
-      {/* --- SLIM MOBILE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex justify-between items-center w-full font-bold uppercase text-[10px] md:text-sm">
+      {/* --- CLASSIC SINGLE-LINE NAVIGATION BAR --- */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs md:text-sm">
           
-          <div className="flex items-center gap-1 md:gap-2">
-            <span className="tracking-widest whitespace-nowrap">GOD</span>
+          <div className="flex items-center gap-2">
+            <span className="tracking-widest truncate max-w-[100px] md:max-w-none">GOD</span>
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
                 else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            }} className="hover:scale-110 transition-transform text-base md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
             {actionableCount > 0 && (
-              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -mt-3 -ml-1">
+              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
               </span>
             )}
-            {!isOnline && <span className="ml-1 md:ml-2 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[9px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             
-            {/* SETTINGS ICON FOR MASTER */}
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-base md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
           
-          <div className="flex gap-1 md:gap-2 items-center">
+          <div className="flex gap-2 items-center">
             {userRole && (
-              <div className="p-0.5 md:p-1 flex gap-0.5 md:gap-1 rounded bg-gray-700">
+              <div className="p-1 flex gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[9px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1391,13 +1426,11 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {}))
-                    // SORT GROUPS BY CHALLAN NO DESCENDING
                     .sort((a, b) => b.keyValue.localeCompare(a.keyValue)) 
                     .map((group, idx) => {
                       
-                      // SORT ITEMS INSIDE THE GROUP ALPHABETICALLY
+                      // ALPHABETICAL SORT
                       const sortedItems = [...group.items].sort((a,b) => (a.item_desc || '').localeCompare(b.item_desc || ''));
-                      
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
                       const hiddenCount = sortedItems.length - 3;
