@@ -73,7 +73,6 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
   
-  // ANTI-DOUBLE-CLICK LOCK
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -98,7 +97,6 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
-  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -134,7 +132,6 @@ export default function App() {
   const [emergencyUrl, setEmergencyUrl] = useState(() => localStorage.getItem('god_emg_url') || '');
 
   const [actionableCount, setActionableCount] = useState(0);
-
   const [toasts, setToasts] = useState([]);
   
   const triggerSystemAlert = (title, body, type = 'success') => {
@@ -157,10 +154,11 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
+  // WATCHDOG TIMER (Prevents Android Black Screen Freezes)
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 3000);
+    }, 4000);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -444,7 +442,6 @@ export default function App() {
     }
   };
 
-  // --- MASTER EDIT SYSTEM ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -454,7 +451,7 @@ export default function App() {
         for (const item of masterEditModal.items) {
           const newQty = parseInt(item.edit_qty) || 0;
           
-          if (newQty === 0) {
+          if (newQty <= 0) {
               await supabase.from('transactions').delete().eq('id', item.id);
           } else {
               const updatePayload = { 
@@ -467,7 +464,7 @@ export default function App() {
           }
         }
         setMasterEditModal(null);
-        triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.keyValue}`, "success");
+        triggerSystemAlert("Record Updated", `Successfully modified items.`, "success");
         refreshAllData();
     } catch(err) {
         triggerSystemAlert("Error", err.message, "error"); 
@@ -600,7 +597,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Grid & Pagination) ---
+  // --- REBUILT PDF ENGINE (Pre-Printed Grid & Pagination) ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
@@ -612,51 +609,48 @@ export default function App() {
         doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.4);
         
-        // Master Outer Box (Drawn unconditionally on every page)
+        // 1. MASTER OUTER BORDER (Drawn fully on every page)
         doc.rect(5, 5, 138, 195, 'S'); 
 
-        // Header Background
+        // 2. HEADER BLOCK
         doc.setFillColor(235, 235, 235); 
         doc.rect(5.2, 5.2, 137.6, 15.6, 'F'); 
         
-        // Header Text
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         
-        // Header Bottom Line
         doc.setDrawColor(0, 0, 0);
-        doc.line(5, 21, 143, 21); 
+        doc.line(5, 21, 143, 21); // Header Bottom Divider
         
-        // Metadata Text
+        // 3. METADATA BLOCK
         doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // Table Header Area
+        // 4. TABLE HEADER BLOCK
         doc.setFillColor(245, 245, 245); 
         doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
         
-        // Table Header Lines
         doc.setDrawColor(0, 0, 0);
-        doc.line(5, 41, 143, 41); 
-        doc.line(5, 48, 143, 48); 
+        doc.line(5, 41, 143, 41); // Top of Header
+        doc.line(5, 48, 143, 48); // Bottom of Header
         
-        // Vertical Grid Lines (Drawn all the way down to Y=175)
+        // 5. VERTICAL GRID LINES (Drawn explicitly to Y=175 on every page)
         const gridEndY = 175; 
-        doc.line(15, 41, 15, gridEndY);  // SR line
-        doc.line(105, 41, 105, gridEndY); // Description line
+        doc.line(15, 41, 15, gridEndY);   // SR line
+        doc.line(105, 41, 105, gridEndY); // Desc line
         doc.line(125, 41, 125, gridEndY); // NOS line
-        doc.line(5, gridEndY, 143, gridEndY); // Bottom of items boundary
+        doc.line(5, gridEndY, 143, gridEndY); // Bottom closure of items area
 
-        // Total Box Outline
+        // 6. TOTAL ROW OUTLINE
         doc.rect(5, 175, 138, 7, 'S'); 
-        doc.line(105, 175, 105, 182); 
+        doc.line(105, 175, 105, 182); // Extend description line into total box
 
-        // Table Column Labels
+        // 7. COLUMN LABELS
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
@@ -667,14 +661,16 @@ export default function App() {
 
     drawPageTemplate();
     let y = 53;
-    const maxY = 173; 
+    const maxY = 172; 
 
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 85); 
+      const desc = item.description || item.item_desc || ''; 
+      const splitDesc = doc.splitTextToSize(desc, 85); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
+      // Page Break Calculation
       if (y + rowHeight > maxY) {
           doc.addPage();
           drawPageTemplate();
@@ -688,6 +684,7 @@ export default function App() {
       doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
+      // Light interior row dividers
       if (index < itemsList.length - 1) { 
         doc.setLineWidth(0.1); 
         doc.setDrawColor(200, 200, 200); 
@@ -697,14 +694,14 @@ export default function App() {
       y += rowHeight + 2; 
     });
 
-    // Populate TOTAL Box ONLY on the very last page
+    // 8. POPULATE TOTAL BOX (Only visible on last page)
     doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 99.6, 6.6, 'F');
     doc.rect(105.2, 175.2, 37.6, 6.6, 'F');
     doc.setFont("helvetica", "bold");
     doc.text("TOTAL", 100, 180, { align: "right" }); 
     doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
 
-    // Populate SIGNATURE Area
+    // 9. POPULATE SIGNATURE BLOCK
     const sigY = 191; 
     doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
@@ -715,13 +712,13 @@ export default function App() {
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     
-    // PAGINATION LOGIC (Page X of Y)
+    // 10. GENERATE AUTOMATED PAGINATION
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 204, { align: "right" });
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
     }
 
     doc.save(`${challanNo}.pdf`);
@@ -1066,7 +1063,7 @@ export default function App() {
     }
   };
 
-  // --- REBUILT VERIFICATION LOGIC ---
+  // --- REBUILT VERIFICATION LOGIC (ASYNC LOCKS & EDITABLE QTY) ---
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
@@ -1087,9 +1084,10 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
+    // BUGFIX: Allow partial verification. User must check at least one box to proceed.
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
-        triggerSystemAlert("Action Required", "Please select at least one item to verify.", "warning");
+        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
         return;
     }
 
@@ -1098,6 +1096,7 @@ export default function App() {
     
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
+        
         const promises = checkedIndexes.map(async (index) => {
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
@@ -1115,12 +1114,16 @@ export default function App() {
     }
   };
 
-  // --- REBUILT DISPATCH PO LOGIC ---
+  // --- REBUILT DISPATCH PO LOGIC (DEEP CLONING) ---
   const openEditPOModal = (groupId, items) => { 
       triggerHaptic(30);
       setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
+  const handleEditPOQty = (index, val) => { 
+      const updated = [...editPOModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setEditPOModal({ ...editPOModal, items: updated }); 
+  };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
@@ -1133,13 +1136,14 @@ export default function App() {
         const challanNo = await getNextSequence('CN'); 
         const backorders = []; 
         const printItems = [];
+        let newPO = null;
 
         for (const item of editPOModal.items) {
           const dispatchQty = parseInt(item.edit_qty) || 0; 
           const reqQty = parseInt(item.req_qty) || 0;
 
           if (dispatchQty <= 0) { 
-              await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); 
+              await supabase.from('transactions').delete().eq('id', item.id); 
               continue; 
           }
           
@@ -1147,7 +1151,7 @@ export default function App() {
           printItems.push({ ...item, disp_qty: dispatchQty }); 
           
           if (dispatchQty < reqQty) { 
-              const newPO = await getNextSequence('PO'); 
+              if (!newPO) newPO = await getNextSequence('PO');
               backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
           }
         }
@@ -1169,7 +1173,11 @@ export default function App() {
       triggerHaptic(30);
       setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
+  const handleProcessReturnQty = (index, val) => { 
+      const updated = [...processReturnModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setProcessReturnModal({ ...processReturnModal, items: updated }); 
+  };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
@@ -1179,18 +1187,35 @@ export default function App() {
     setIsProcessing(true);
     
     try {
-        const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
+        const challanNo = await getNextSequence('RT'); 
+        const backorders = []; 
+        const printItems = [];
+        let newRR = null;
+
         for (const item of processReturnModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
-          if (dispatchQty <= 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
-          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); 
-          if (dispatchQty < reqQty) { const newRR = await getNextSequence('RR'); backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); }
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
+
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').delete().eq('id', item.id); 
+              continue; 
+          }
+
+          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
+          printItems.push({ ...item, disp_qty: dispatchQty }); 
+          
+          if (dispatchQty < reqQty) { 
+              if (!newRR) newRR = await getNextSequence('RR');
+              backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); 
+          }
         }
+
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
         
         setProcessReturnModal(null); 
         refreshAllData();
+        triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
     } catch(err) {
         triggerSystemAlert("Error", err.message, "error");
     } finally {
@@ -1202,8 +1227,8 @@ export default function App() {
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
-          <div className="text-gray-800 font-black tracking-widest animate-pulse uppercase text-lg">INITIALIZING SYSTEM...</div>
-          <div className="text-xs font-bold text-gray-500 mt-2 uppercase">Connecting to Database</div>
+          <div className="text-gray-800 font-black tracking-widest uppercase text-lg">INITIALIZING SYSTEM...</div>
+          <div className="text-xs font-bold text-gray-500 mt-2 uppercase animate-pulse">Connecting to Database</div>
       </div>
     </div>
   );
@@ -1290,7 +1315,7 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
               
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
                   <div key={idx} className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 bg-gray-100 border border-gray-300 p-2">
