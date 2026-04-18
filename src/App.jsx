@@ -128,9 +128,11 @@ export default function App() {
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
-  // --- NEW: MASTER ROLE MODALS ---
+  // --- MASTER ROLE MODALS ---
   const [deleteModal, setDeleteModal] = useState(null);
   const [masterEditModal, setMasterEditModal] = useState(null);
+  const [settingsModal, setSettingsModal] = useState(false);
+  const [emergencyUrl, setEmergencyUrl] = useState(() => localStorage.getItem('god_emg_url') || '');
 
   const [actionableCount, setActionableCount] = useState(0);
 
@@ -271,7 +273,6 @@ export default function App() {
     if (data?.user) {
       await fetchRole(data.user.id);
       
-      // ENTERPRISE ONE-SIGNAL INITIALIZATION
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
@@ -424,7 +425,6 @@ export default function App() {
     } catch (error) { triggerSystemAlert("Failed", error.message, "error"); }
   };
 
-  // --- TWO-TIER MASTER DELETION SYSTEM ---
   const executeDelete = async (type) => {
     if(!isOnline) { triggerSystemAlert("Error", "Internet required to delete records.", "error"); return; }
     setIsProcessing(true);
@@ -445,14 +445,17 @@ export default function App() {
     refreshAllData();
   };
 
-  // --- MASTER EDIT SYSTEM ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); triggerHaptic([40, 40, 100]);
 
     for (const item of masterEditModal.items) {
       const newQty = parseInt(item.edit_qty) || 0;
-      const updatePayload = { [masterEditModal.keyField]: masterEditModal.newKeyValue };
+      const updatePayload = { 
+          [masterEditModal.keyField]: masterEditModal.newKeyValue,
+          item_desc: cleanDesc(item.item_desc),
+          unit: getUnit(item.item_desc) 
+      };
       if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
       if (item.req_qty !== null) updatePayload.req_qty = newQty;
       await supabase.from('transactions').update(updatePayload).eq('id', item.id);
@@ -462,6 +465,13 @@ export default function App() {
     setMasterEditModal(null);
     triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.newKeyValue}`, "success");
     refreshAllData();
+  };
+
+  const saveSettings = (e) => {
+      e.preventDefault();
+      localStorage.setItem('god_emg_url', emergencyUrl);
+      setSettingsModal(false);
+      triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success");
   };
 
   const formatDate = (dateInput) => {
@@ -986,7 +996,7 @@ export default function App() {
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
-    // NEW: Pass the edit_qty into state so workers can adjust received amounts
+    // Ensure the input field shows the expected received quantity by default
     setVerifyModal({ 
       challanNo, 
       items: items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
@@ -1008,7 +1018,7 @@ export default function App() {
     setIsProcessing(true);
     const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     
-    // NEW: Update rows with the manually typed received quantity
+    // Process items with potentially altered quantities
     for (let i = 0; i < verifyModal.items.length; i++) {
         if (verifyModal.checks[i]) {
             const item = verifyModal.items[i];
@@ -1125,6 +1135,21 @@ export default function App() {
         .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
       `}} />
 
+      {/* --- SETTINGS MODAL (EMERGENCY URL) --- */}
+      {settingsModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[70]">
+            <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                <h2 className="text-lg font-black border-b-2 border-black pb-2 mb-4 uppercase text-gray-800">SYSTEM CONFIGURATION</h2>
+                <label className="block text-[11px] font-bold text-gray-700 mb-1.5 uppercase">Emergency Portal (Google Script URL)</label>
+                <input type="text" value={emergencyUrl} onChange={(e) => setEmergencyUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..." className="w-full border-2 border-black p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:bg-yellow-50 select-text mb-4" />
+                <div className="flex gap-2">
+                    <button onClick={() => { triggerHaptic(30); setSettingsModal(false); }} className="flex-1 bg-gray-200 border-2 border-black p-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-center transition-colors">CANCEL</button>
+                    <button onClick={saveSettings} className="flex-1 bg-blue-800 text-white border-2 border-black p-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 text-center transition-colors">SAVE LINK</button>
+                </div>
+            </div>
+        </div>
+      )}
+
       {/* --- MASTER DELETE MODAL --- */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
@@ -1163,13 +1188,18 @@ export default function App() {
               <div className="space-y-2 mb-4 md:mb-6 max-h-56 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                  <div key={idx} className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 bg-gray-100 border border-gray-300 p-2">
+                    <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
+                        const updated = [...masterEditModal.items]; updated[idx].item_desc = e.target.value; setMasterEditModal({...masterEditModal, items: updated});
+                    }} className="flex-1 text-[13px] md:text-sm p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
                     <input type="number" value={item.edit_qty} onChange={(e) => {
                         const updated = [...masterEditModal.items]; updated[idx].edit_qty = e.target.value; setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    }} className="w-full md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
+                <datalist id="masterItemsList">
+                    {masterItems.map((m, i) => <option key={i} value={m.description} />)}
+                </datalist>
               </div>
               <div className="flex space-x-2">
                 <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
@@ -1179,12 +1209,18 @@ export default function App() {
         </div>
       )}
 
+      {/* --- RESPONSIVE NAVIGATION BAR --- */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
-          <div className="flex items-center gap-2">
+        <div className="container mx-auto flex flex-col md:flex-row justify-between items-center font-bold uppercase text-sm gap-3 md:gap-0">
+          
+          <div className="flex justify-between items-center w-full md:w-auto">
             <div className="relative flex items-center">
               <span className="tracking-widest">Gujarat Oil Depot</span>
-              <a href="YOUR_GOOGLE_WEB_APP_URL_HERE" target="_blank" rel="noopener noreferrer" className="ml-2 hover:scale-110 transition-transform text-lg" title="Emergency Fallback Portal">🚨</a>
+              <button onClick={() => {
+                  triggerHaptic(50);
+                  if (emergencyUrl) window.open(emergencyUrl, '_blank');
+                  else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
+              }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
               {actionableCount > 0 && (
                 <span className="absolute -top-1 -right-3 flex h-3 w-3">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -1192,23 +1228,30 @@ export default function App() {
                 </span>
               )}
             </div>
-            {!isOnline && <span className="ml-4 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
-            {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC PENDING (${offlineQueue.length})`}</span>}
+            <div className="flex items-center">
+               {!isOnline && <span className="ml-4 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+               {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC (${offlineQueue.length})`}</span>}
+               
+               {/* SETTINGS ICON FOR MASTER */}
+               {(userRole === 'admin' || userRole === 'master') && (
+                  <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-3 text-gray-400 hover:text-white transition-colors text-lg" title="System Settings">⚙️</button>
+               )}
+            </div>
           </div>
           
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-wrap justify-center gap-2 items-center w-full md:w-auto">
             {userRole && (
-              <div className="p-1 flex gap-1 rounded bg-gray-700">
+              <div className="p-1 flex gap-1 rounded bg-gray-700 w-full md:w-auto justify-center">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700 transition-colors w-full md:w-auto">LOGOUT</button>
           </div>
         </div>
       </nav>
