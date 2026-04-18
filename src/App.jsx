@@ -1,6 +1,5 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
-import OneSignal from 'react-onesignal';
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
@@ -73,6 +72,9 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false); 
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
+  
+  // ANTI-DOUBLE-CLICK LOCK
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [offlineQueue, setOfflineQueue] = useState(() => {
@@ -95,6 +97,9 @@ export default function App() {
   
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
+  
+  // SMART ACCORDION STATE
+  const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
   const [searchQuery, setSearchQuery] = useState('');
@@ -148,6 +153,14 @@ export default function App() {
   const retailQtyRef = useRef(null);
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
+
+  // ANTI-FREEZE WATCHDOG
+  useEffect(() => {
+    const timer = setTimeout(() => {
+       if(loadingAuth) setLoadingAuth(false);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [loadingAuth]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -224,39 +237,21 @@ export default function App() {
   }, [view, depotMode, retailMode]);
 
   async function fetchRole(userId) {
-  try {
-    const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
-    if (error) throw error;
-    if (data) {
-      const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
-      setUserRole(currentRole);
-      fetchAvailableYears();
-
-      // --- ONESIGNAL INITIALIZATION ---
-      try {
-        await OneSignal.init({
-          appId: "YOUR_ONESIGNAL_APP_ID_HERE", // Paste your App ID here
-          notifyButton: { enable: false }, // We handle the prompt manually
-          allowLocalhostAsSecureOrigin: true
-        });
-        // Ask the worker for permission on their phone
-        OneSignal.Slidedown.promptPush();
-        // Tag this specific phone with their role (so we don't send Depot alerts to Retail)
-        OneSignal.User.addTag("role", currentRole);
-      } catch (e) { console.error("OneSignal Init Error", e); }
-      // --------------------------------
-
-      if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
-      else if (currentRole === 'retail') setView('retail'); 
-      else if (currentRole === 'depot') setView('depot'); 
-      else setView('unassigned'); 
-    }
-  } catch (err) {
-    console.error("Role Fetch Error:", err);
-  } finally {
-    setLoadingAuth(false); 
+    try {
+      const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
+      if (error) throw error;
+      if (data) {
+        const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
+        setUserRole(currentRole);
+        fetchAvailableYears();
+        if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
+        else if (currentRole === 'retail') setView('retail'); 
+        else if (currentRole === 'depot') setView('depot'); 
+        else setView('unassigned'); 
+      }
+    } catch (err) {
+    } finally { setLoadingAuth(false); }
   }
-}
 
   async function handleLogin(e) {
     e.preventDefault(); 
@@ -380,7 +375,7 @@ export default function App() {
   };
 
   const executeTransaction = async (txPayload, alertTitle, alertMsg, onSuccess) => {
-    if (onSuccess) onSuccess(); // Async masking
+    if (onSuccess) onSuccess(); 
     if (isOnline) {
       const { error } = await supabase.from('transactions').insert(txPayload);
       if (error) {
@@ -533,6 +528,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
+  // --- ENTERPRISE FIX: PDF ALIGNMENT & PAGINATION ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
     const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
@@ -551,7 +547,10 @@ export default function App() {
         doc.setFillColor(245, 245, 245); doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
         doc.setLineWidth(0.4); doc.line(5, 41, 143, 41); doc.line(5, 48, 143, 48);
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 56, 46, { align: "center" }); doc.text("NOS", 104, 46, { align: "center" }); doc.text("QTY", 127.5, 46, { align: "center" });
+        doc.text("SR", 10, 46, { align: "center" }); 
+        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 110, 46, { align: "right" }); 
+        doc.text("QTY", 140, 46, { align: "right" });
         doc.setFont("helvetica", "normal");
     };
 
@@ -560,7 +559,7 @@ export default function App() {
     let startY = 41;
 
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 80); 
+      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 75); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
@@ -574,7 +573,10 @@ export default function App() {
       }
 
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
-      doc.setFont("helvetica", "bold"); doc.text(paddedQty, 104, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 127.5, y, { align: "center" });
+      doc.setFont("helvetica", "bold"); 
+      doc.text(paddedQty, 110, y, { align: "right" }); 
+      doc.setFontSize(8); 
+      doc.text(displayStr, 140, y, { align: "right" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
       if (index < itemsList.length - 1) { doc.setLineWidth(0.1); doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); }
@@ -583,7 +585,7 @@ export default function App() {
 
     const tableBottom = Math.max(y - 1, 165); doc.setFillColor(235, 235, 235); doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
     doc.setLineWidth(0.4); doc.line(5, tableBottom, 143, tableBottom); doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 104, tableBottom + 4.2, { align: "center" });
+    doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 110, tableBottom + 4.2, { align: "right" });
     doc.line(5, tableBottom + 6, 143, tableBottom + 6);
     doc.line(15, startY, 15, tableBottom + 6); doc.line(97, startY, 97, tableBottom + 6); doc.line(112, startY, 112, tableBottom + 6);
     doc.line(5, startY, 5, tableBottom + 6); doc.line(143, startY, 143, tableBottom + 6); 
@@ -834,6 +836,11 @@ export default function App() {
     }
   };
 
+  // SMART ACCORDION TOGGLE
+  const toggleGroupExpand = (groupId) => {
+    setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
   const retailFilteredItems = smartSearch(retailSearch);
   
   const addToRetailCart = (e) => {
@@ -858,16 +865,21 @@ export default function App() {
 
   const submitRetailAction = async (e) => {
     if (e) e.preventDefault();
-    if (retailCart.length === 0) return; 
+    if (retailCart.length === 0 || isProcessing) return; 
+    
     triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
     const tx = retailCart.map(item => ({ 
       group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
       unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
       challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
     }));
+    
     executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
       setRetailCart([]); setRetailReturnNote('');
+      setIsProcessing(false);
     });
   };
 
@@ -894,13 +906,18 @@ export default function App() {
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
   const submitDepotAction = async (e) => {
-    e.preventDefault(); if (depotCart.length === 0) return;
+    e.preventDefault(); 
+    if (depotCart.length === 0 || isProcessing) return;
+    
     triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+
     if (depotMode === 'DISPATCH') {
       const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
       const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
       executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
         printPDF(challanNo, depotCart); setDepotCart([]); 
+        setIsProcessing(false);
       });
     } else {
       const groupId = await getNextSequence('RR');
@@ -910,6 +927,7 @@ export default function App() {
       }));
       executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
         setDepotCart([]); setDepotReturnNote('');
+        setIsProcessing(false);
       });
     }
   };
@@ -926,10 +944,13 @@ export default function App() {
 
   const acceptDelivery = async () => {
     if (!isOnline) { alert("You must be online to verify and accept deliveries."); return; }
-    if (!verifyModal) return; 
+    if (!verifyModal || isProcessing) return; 
+    
     triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
     const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     const { error } = await supabase.from('transactions').update({ status: newStatus }).eq('challan_no', verifyModal.challanNo);
+    setIsProcessing(false);
     if (!error) { setVerifyModal(null); refreshAllData(); }
   };
 
@@ -941,8 +962,11 @@ export default function App() {
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { alert("You must be online to process and dispatch Purchase Orders."); return; }
-    if (!editPOModal) return; 
+    if (!editPOModal || isProcessing) return; 
+    
     triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
     for (const item of editPOModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
@@ -952,7 +976,10 @@ export default function App() {
     }
     if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
     if (printItems.length > 0) printPDF(challanNo, printItems);
-    setEditPOModal(null); refreshAllData();
+    
+    setIsProcessing(false);
+    setEditPOModal(null); 
+    refreshAllData();
   };
 
   const openProcessReturnModal = (groupId, items) => { 
@@ -963,8 +990,11 @@ export default function App() {
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { alert("You must be online to process return requests."); return; }
-    if (!processReturnModal) return; 
+    if (!processReturnModal || isProcessing) return; 
+    
     triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = [];
     for (const item of processReturnModal.items) {
       const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
@@ -974,10 +1004,13 @@ export default function App() {
     }
     if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
     if (printItems.length > 0) printPDF(challanNo, printItems);
-    setProcessReturnModal(null); refreshAllData();
+    
+    setIsProcessing(false);
+    setProcessReturnModal(null); 
+    refreshAllData();
   };
 
-  // --- ENTERPRISE FIX: SKELETON LOADER ---
+  // --- ENTERPRISE FIX: SKELETON LOADER (Anti-Freeze) ---
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 p-3 md:p-4 font-sans flex flex-col gap-4 select-none">
       <div className="h-14 bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
@@ -1076,7 +1109,7 @@ export default function App() {
               </div>
               <div className="flex space-x-3">
                 <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black transition-colors">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean)} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all">CONFIRM MATCH</button>
+                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
               </div>
             </div>
           </div>
@@ -1098,7 +1131,7 @@ export default function App() {
               </div>
               <div className="flex space-x-2">
                 <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmDispatchPO} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all">Generate Challan</button>
+                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
               </div>
             </div>
           </div>
@@ -1120,7 +1153,7 @@ export default function App() {
               </div>
               <div className="flex space-x-3">
                 <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all">GENERATE RETURN</button>
+                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
               </div>
             </div>
           </div>
@@ -1170,8 +1203,8 @@ export default function App() {
                       <th className="p-2 md:p-3 border-r border-gray-300 w-24 md:w-28 text-center select-text whitespace-nowrap">DATE / TIME</th>
                       <th className="p-2 md:p-3 border-r border-gray-300 select-text whitespace-nowrap">CHALLAN NO</th>
                       <th className="p-2 md:p-3 border-r border-gray-300 w-1/2 select-text whitespace-nowrap">ITEM DESCRIPTION</th>
-                      <th className="p-2 md:p-3 text-center border-r border-gray-300 select-text whitespace-nowrap">NOS</th>
-                      <th className="p-2 md:p-3 text-center border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
+                      <th className="p-2 md:p-3 text-right border-r border-gray-300 select-text whitespace-nowrap">NOS</th>
+                      <th className="p-2 md:p-3 text-right border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
                       <th className="p-2 md:p-3 text-center border-r border-gray-300 w-40 md:w-48 select-none whitespace-nowrap">ADMIN NOTE</th>
                       <th className="p-2 md:p-3 text-center w-16 md:w-20 select-none whitespace-nowrap">PDF</th>
                       {userRole === 'master' && <th className="p-2 md:p-3 text-center w-12 md:w-16 select-none bg-red-100 text-red-800 whitespace-nowrap">DEL</th>}
@@ -1190,7 +1223,14 @@ export default function App() {
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
-                    }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => (
+                    }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => {
+                      
+                      // SMART ACCORDION LOGIC
+                      const isExpanded = expandedGroups[group.keyValue];
+                      const visibleItems = isExpanded ? group.items : group.items.slice(0, 3);
+                      const hiddenCount = group.items.length - 3;
+
+                      return (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 transition-colors ${group.status === 'DELETED' ? 'bg-gray-200 opacity-60' : group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
                         <td className="p-2 md:p-3 border-r border-gray-300 text-center font-bold leading-tight">
                           {formatDate(group.timestamp)}<br/><span className="text-gray-600 font-normal text-[11px] md:text-[13px]">{formatTime(group.timestamp)}</span>
@@ -1201,17 +1241,19 @@ export default function App() {
                         </td>
                         <td className="p-2 md:p-3 border-r border-gray-200">
                           <ul className="space-y-1 md:space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[250px] md:max-w-[300px] xl:max-w-[400px] ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-1 md:mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                            {visibleItems.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[250px] md:max-w-[300px] xl:max-w-[400px] ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-1 md:mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                            {hiddenCount > 0 && !isExpanded && <li className="text-blue-700 cursor-pointer font-black text-[11px] mt-1 uppercase" onClick={() => toggleGroupExpand(group.keyValue)}>+ {hiddenCount} MORE ITEMS</li>}
+                            {hiddenCount > 0 && isExpanded && <li className="text-blue-700 cursor-pointer font-black text-[11px] mt-1 uppercase" onClick={() => toggleGroupExpand(group.keyValue)}>SHOW LESS</li>}
                           </ul>
                         </td>
-                        <td className="p-2 md:p-3 border-r border-gray-200 text-center">
+                        <td className="p-2 md:p-3 border-r border-gray-200 text-right pr-4">
                           <ul className="space-y-1 md:space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
+                            {visibleItems.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-900':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{group.status === 'RETURN_ACCEPTED' ? '-' : ''}{i.disp_qty || i.req_qty}</li>)}
                           </ul>
                         </td>
-                        <td className="p-2 md:p-3 border-r border-gray-200 text-center whitespace-nowrap">
+                        <td className="p-2 md:p-3 border-r border-gray-200 text-right pr-4 whitespace-nowrap">
                            <ul className="space-y-1 md:space-y-1.5">
-                            {group.items.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                            {visibleItems.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
                           </ul>
                         </td>
                         <td className="p-2 md:p-3 border-r border-gray-200 align-top select-none">
@@ -1236,7 +1278,7 @@ export default function App() {
                                 ) : (
                                   <div className="flex flex-col items-start gap-1">
                                     <button 
-                                      onClick={() => { setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
+                                      onClick={() => { triggerHaptic(20); setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
                                       className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100 transition-colors"
                                     >
                                       {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
@@ -1267,6 +1309,7 @@ export default function App() {
                         <td className="p-2 md:p-3 text-center vertical-middle select-none">
                           {group.challan_no && group.status !== 'DELETED' && isWithin30Days(group.timestamp) ? (
                             <button onClick={() => {
+                                triggerHaptic(30);
                                 const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
                                 printPDF(group.challan_no, fullChallanItems);
                               }} 
@@ -1286,7 +1329,7 @@ export default function App() {
                           </td>
                         )}
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -1343,7 +1386,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToDepotCart} className="w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all">
+                  <button type="button" onClick={addToDepotCart} disabled={isProcessing} className="w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all disabled:opacity-50">
                     + ADD TO {depotMode === 'RETURN_REQUEST' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
@@ -1377,8 +1420,8 @@ export default function App() {
                   {depotMode === 'RETURN_REQUEST' && (
                     <input type="text" value={depotReturnNote} onChange={(e) => setDepotReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text transition-colors" />
                   )}
-                  <button onClick={submitDepotAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
-                    {depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
+                  <button onClick={submitDepotAction} disabled={isProcessing} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 ${depotMode === 'RETURN_REQUEST' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-blue-800 hover:bg-blue-900 border-blue-900'}`}>
+                    {isProcessing ? 'PROCESSING...' : depotMode === 'RETURN_REQUEST' ? `SUBMIT REQUEST (${depotCart.length})` : `ISSUE CHALLAN (${depotCart.length})`}
                   </button>
                 </div>
               )}
@@ -1499,7 +1542,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={addToRetailCart} className={`w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all`}>
+                  <button type="button" onClick={addToRetailCart} disabled={isProcessing} className={`w-full text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none mt-1 md:mt-2 bg-gray-800 hover:bg-black border-black transition-all disabled:opacity-50`}>
                     + ADD TO {retailMode === 'RETURN' ? 'RETURN' : 'ORDER'}
                   </button>
                 </div>
@@ -1533,8 +1576,8 @@ export default function App() {
                   {retailMode === 'RETURN' && (
                     <input type="text" value={retailReturnNote} onChange={(e) => setRetailReturnNote(e.target.value)} placeholder="ADD OPTIONAL RETURN NOTE" className="w-full border-2 border-red-400 p-2.5 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:border-red-600 focus:bg-yellow-50 mb-3 md:mb-4 select-text transition-colors" />
                   )}
-                  <button onClick={submitRetailAction} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-slate-800 hover:bg-slate-900 border-slate-900'}`}>
-                    {retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
+                  <button onClick={submitRetailAction} disabled={isProcessing} className={`w-full mt-auto text-white font-bold text-[13px] py-2.5 md:py-3 border-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none transition-all disabled:opacity-50 ${retailMode === 'RETURN' ? 'bg-red-700 hover:bg-red-800 border-red-900' : 'bg-slate-800 hover:bg-slate-900 border-slate-900'}`}>
+                    {isProcessing ? 'PROCESSING...' : retailMode === 'RETURN' ? `SUBMIT RETURN (${retailCart.length})` : `SUBMIT P.O. (${retailCart.length})`}
                   </button>
                 </div>
               )}
