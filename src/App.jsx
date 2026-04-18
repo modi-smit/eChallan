@@ -73,6 +73,7 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
   
+  // ANTI-DOUBLE-CLICK LOCK
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -97,6 +98,7 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
+  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -266,6 +268,7 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
+      
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
@@ -280,6 +283,7 @@ export default function App() {
           }
         });
       }
+      
       if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
         Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
       }
@@ -443,7 +447,6 @@ export default function App() {
     for (const item of masterEditModal.items) {
       const newQty = parseInt(item.edit_qty) || 0;
       
-      // ENTERPRISE ZERO-CULLING RULE
       if (newQty === 0) {
           await supabase.from('transactions').delete().eq('id', item.id);
       } else {
@@ -588,7 +591,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REWRITTEN ENTERPRISE PDF ENGINE (Perfect Bounding & Alignment) ---
+  // --- REWRITTEN ENTERPRISE PDF ENGINE ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
     const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
@@ -599,31 +602,40 @@ export default function App() {
         doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        doc.setLineWidth(0.4); doc.line(5, 21, 143, 21); doc.setFontSize(9);
+        
+        doc.setLineWidth(0.4); 
+        doc.line(5, 21, 143, 21); // Header Divider
+        
+        // Metadata
+        doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(challanNo, 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        
+        // Table Header Background
         doc.setFillColor(245, 245, 245); doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
-        doc.setLineWidth(0.4); doc.line(5, 41, 143, 41); doc.line(5, 48, 143, 48);
+        
+        // Table Grid (Full Page Pre-Print)
+        doc.rect(5, 5, 138, 190); // Master Outer Box
+        doc.line(5, 41, 143, 41); // Top of Table Header
+        doc.line(5, 48, 143, 48); // Bottom of Table Header
+        
+        doc.line(15, 41, 15, 175); // SR Divider (Goes to bottom of items)
+        doc.line(100, 41, 100, 175); // DESC Divider
+        doc.line(120, 41, 120, 175); // NOS Divider
+        doc.line(5, 175, 143, 175); // Bottom of Items Area
+
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 112, 46, { align: "right" }); 
+        doc.text("NOS", 110, 46, { align: "right" }); 
         doc.text("QTY", 140, 46, { align: "right" });
         doc.setFont("helvetica", "normal");
     };
 
-    const closePageGrid = (bottomY) => {
-        doc.setLineWidth(0.4);
-        doc.line(5, bottomY, 143, bottomY); // Bottom line
-        doc.line(15, 41, 15, bottomY); // Vertical 1
-        doc.line(100, 41, 100, bottomY); // Vertical 2
-        doc.line(120, 41, 120, bottomY); // Vertical 3
-        doc.rect(5, 5, 138, bottomY - 5); // Full page bounding box
-    };
-
     drawPageTemplate();
     let y = 53;
+    const maxY = 170; 
 
     itemsList.forEach((item, index) => {
       const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 75); 
@@ -631,9 +643,8 @@ export default function App() {
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Page Break Trigger
-      if (y + rowHeight > 185) {
-          closePageGrid(y - 2); // Close the current page border
+      // Page Break
+      if (y + rowHeight > maxY) {
           doc.addPage();
           drawPageTemplate();
           y = 53;
@@ -641,30 +652,47 @@ export default function App() {
 
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
       doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 112, y, { align: "right" }); 
+      doc.text(paddedQty, 110, y, { align: "right" }); 
       doc.setFontSize(8); 
       doc.text(displayStr, 140, y, { align: "right" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
-      if (index < itemsList.length - 1) { doc.setLineWidth(0.1); doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); }
+      if (index < itemsList.length - 1) { 
+        doc.setLineWidth(0.1); 
+        doc.setDrawColor(200, 200, 200); // Light Gray row divider
+        doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); 
+        doc.setDrawColor(0, 0, 0); // Reset to black
+      }
       y += rowHeight + 2; 
     });
 
-    const tableBottom = Math.max(y - 1, 165); doc.setFillColor(235, 235, 235); doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
-    closePageGrid(tableBottom + 6); // Close final page grid
-    
-    doc.setLineWidth(0.4); doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 96, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 112, tableBottom + 4.2, { align: "right" });
+    // TOTAL BOX (Y: 175 to 182)
+    doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 137.6, 6.6, 'F');
+    doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 96, 180, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 110, 180, { align: "right" });
+    doc.setLineWidth(0.4); doc.line(5, 182, 143, 182); // Bottom of Total Box
 
-    const sigY = tableBottom + 12 < 190 ? tableBottom + 12 : 190; 
+    // SIGNATURE BLOCK (Y: 182 to 195)
+    const sigY = 191; 
     doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); 
-      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 10);
+      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
+      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
     }
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 4, { align: "right" });
+    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
+    
+    // PAGINATION GENERATOR (Page 1 of X)
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.text(`Page ${i} of ${totalPages}`, 140, 200, { align: "right" });
+    }
+
     doc.save(`${challanNo}.pdf`);
   };
 
@@ -1005,7 +1033,7 @@ export default function App() {
       challanNo, 
       items: items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
       checks, 
-      isDepotReturn: challanNo ? challanNo.startsWith('RT') : false
+      isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
     });
   };
 
@@ -1212,12 +1240,12 @@ export default function App() {
         </div>
       )}
 
-      {/* --- RESPONSIVE NAVIGATION BAR --- */}
+      {/* --- SLIM MOBILE NAVIGATION BAR --- */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[10px] md:text-sm">
           
           <div className="flex items-center gap-1 md:gap-2">
-            <span className="tracking-widest truncate max-w-[120px] md:max-w-none">Gujarat Oil Depot</span>
+            <span className="tracking-widest">Gujarat Oil Depot</span>
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
@@ -1234,7 +1262,7 @@ export default function App() {
             
             {/* SETTINGS ICON FOR MASTER */}
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
           
