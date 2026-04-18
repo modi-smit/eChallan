@@ -128,6 +128,10 @@ export default function App() {
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
+  // --- NEW: MASTER ROLE MODALS ---
+  const [deleteModal, setDeleteModal] = useState(null);
+  const [masterEditModal, setMasterEditModal] = useState(null);
+
   const [actionableCount, setActionableCount] = useState(0);
 
   // --- IN-APP TOAST SYSTEM ---
@@ -244,6 +248,7 @@ export default function App() {
         const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
         setUserRole(currentRole);
         fetchAvailableYears();
+
         if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
         else if (currentRole === 'retail') setView('retail'); 
         else if (currentRole === 'depot') setView('depot'); 
@@ -265,6 +270,24 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
+      
+      // ENTERPRISE ONE-SIGNAL INITIALIZATION
+      if (window.OneSignalDeferred) {
+        window.OneSignalDeferred.push(async function(OneSignal) {
+          await OneSignal.init({
+            appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
+            safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
+            notifyButton: { enable: true },
+          });
+          OneSignal.User.PushSubscription.optIn();
+          
+          const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
+          if (roleData && roleData.role) {
+             OneSignal.User.addTag("role", roleData.role.toLowerCase().trim());
+          }
+        });
+      }
+      
       if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
         Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
       }
@@ -401,14 +424,44 @@ export default function App() {
     } catch (error) { triggerSystemAlert("Failed", error.message, "error"); }
   };
 
-  const deleteLedgerGroup = async (keyField, keyValue) => {
+  // --- TWO-TIER MASTER DELETION SYSTEM ---
+  const executeDelete = async (type) => {
     if(!isOnline) { triggerSystemAlert("Error", "Internet required to delete records.", "error"); return; }
+    setIsProcessing(true);
     triggerHaptic([50, 50, 100]);
-    if (window.confirm(`MASTER OVERRIDE: Mark all records for ${keyValue} as DELETED?\n\nThis will zero-out the quantities but keep the Sequence Number visible in the ledger for auditing transparency.`)) {
-      const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(keyField, keyValue);
+    
+    if (type === 'SOFT') {
+      const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue);
       if (error) triggerSystemAlert("Failed", error.message, "error"); 
-      else { triggerSystemAlert("Deleted", `Record ${keyValue} marked as deleted.`, "success"); refreshAllData(); }
+      else triggerSystemAlert("Voided", `Record ${deleteModal.keyValue} marked as deleted.`, "success");
+    } else {
+      const { error } = await supabase.from('transactions').delete().eq(deleteModal.keyField, deleteModal.keyValue);
+      if (error) triggerSystemAlert("Failed", error.message, "error"); 
+      else triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success");
     }
+    
+    setIsProcessing(false);
+    setDeleteModal(null);
+    refreshAllData();
+  };
+
+  // --- MASTER EDIT SYSTEM ---
+  const confirmMasterEdit = async () => {
+    if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
+    setIsProcessing(true); triggerHaptic([40, 40, 100]);
+
+    for (const item of masterEditModal.items) {
+      const newQty = parseInt(item.edit_qty) || 0;
+      const updatePayload = { [masterEditModal.keyField]: masterEditModal.newKeyValue };
+      if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
+      if (item.req_qty !== null) updatePayload.req_qty = newQty;
+      await supabase.from('transactions').update(updatePayload).eq('id', item.id);
+    }
+
+    setIsProcessing(false);
+    setMasterEditModal(null);
+    triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.newKeyValue}`, "success");
+    refreshAllData();
   };
 
   const formatDate = (dateInput) => {
@@ -528,7 +581,6 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- ENTERPRISE FIX: PDF ALIGNMENT & PAGINATION ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
     const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
@@ -836,7 +888,6 @@ export default function App() {
     }
   };
 
-  // SMART ACCORDION TOGGLE
   const toggleGroupExpand = (groupId) => {
     setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
@@ -935,8 +986,15 @@ export default function App() {
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
-    setVerifyModal({ challanNo, items, checks, isDepotReturn: challanNo.startsWith('RT') });
+    // NEW: Pass the edit_qty into state so workers can adjust received amounts
+    setVerifyModal({ 
+      challanNo, 
+      items: items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
+      checks, 
+      isDepotReturn: challanNo.startsWith('RT') 
+    });
   };
+
   const toggleVerifyCheck = (index) => {
       triggerHaptic(20);
       setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
@@ -949,9 +1007,19 @@ export default function App() {
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
     const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
-    const { error } = await supabase.from('transactions').update({ status: newStatus }).eq('challan_no', verifyModal.challanNo);
+    
+    // NEW: Update rows with the manually typed received quantity
+    for (let i = 0; i < verifyModal.items.length; i++) {
+        if (verifyModal.checks[i]) {
+            const item = verifyModal.items[i];
+            const finalQty = parseInt(item.edit_qty) || 0;
+            await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
+        }
+    }
+    
     setIsProcessing(false);
-    if (!error) { setVerifyModal(null); refreshAllData(); }
+    setVerifyModal(null); 
+    refreshAllData();
   };
 
   const openEditPOModal = (groupId, items) => { 
@@ -1010,7 +1078,6 @@ export default function App() {
     refreshAllData();
   };
 
-  // --- ENTERPRISE FIX: SKELETON LOADER (Anti-Freeze) ---
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 p-3 md:p-4 font-sans flex flex-col gap-4 select-none">
       <div className="h-14 bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
@@ -1058,6 +1125,60 @@ export default function App() {
         .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
       `}} />
 
+      {/* --- MASTER DELETE MODAL --- */}
+      {deleteModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                <h2 className="text-lg font-black border-b-2 border-black pb-2 mb-4 uppercase text-red-800">DELETE RECORD: {deleteModal.keyValue}</h2>
+                <p className="text-[13px] md:text-sm font-bold text-gray-700 mb-6">How would you like to remove this record?</p>
+                
+                <div className="flex flex-col gap-3">
+                    <button onClick={() => executeDelete('SOFT')} disabled={isProcessing} className="w-full bg-gray-200 border-2 border-black p-3 text-left hover:bg-gray-300 transition-colors disabled:opacity-50">
+                        <span className="block text-black font-black text-sm">1. VOID (Soft Delete)</span>
+                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the Challan/PO number in the ledger for auditing transparency.</span>
+                    </button>
+                    
+                    <button onClick={() => executeDelete('HARD')} disabled={isProcessing} className="w-full bg-red-100 border-2 border-red-900 p-3 text-left hover:bg-red-200 transition-colors disabled:opacity-50">
+                        <span className="block text-red-900 font-black text-sm">2. WIPE COMPLETELY (Hard Delete)</span>
+                        <span className="block text-[11px] md:text-xs font-bold text-red-700 mt-1 uppercase">Erases all history permanently. Frees up the number to be reused.</span>
+                    </button>
+                    
+                    <button onClick={() => { triggerHaptic(30); setDeleteModal(null); }} disabled={isProcessing} className="w-full bg-black text-white border-2 border-black p-3 text-[13px] md:text-sm font-bold mt-2 hover:bg-gray-800 text-center transition-colors">CANCEL</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- MASTER EDIT MODAL --- */}
+      {masterEditModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
+              
+              <div className="mb-4">
+                  <label className="block text-[11px] font-bold text-gray-700 mb-1 uppercase">Challan / PO Number</label>
+                  <input type="text" value={masterEditModal.newKeyValue} onChange={(e) => setMasterEditModal({...masterEditModal, newKeyValue: e.target.value.toUpperCase()})} className="w-full border-2 border-black p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:bg-yellow-50 select-text transition-colors" />
+              </div>
+
+              <div className="space-y-2 mb-4 md:mb-6 max-h-56 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
+                {masterEditModal.items.map((item, idx) => (
+                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
+                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => {
+                        const updated = [...masterEditModal.items]; updated[idx].edit_qty = e.target.value; setMasterEditModal({...masterEditModal, items: updated});
+                    }} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  </div>
+                ))}
+              </div>
+              <div className="flex space-x-2">
+                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
+              </div>
+            </div>
+        </div>
+      )}
+
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
         <div className="container mx-auto flex justify-between items-center font-bold uppercase text-sm">
           <div className="flex items-center gap-2">
@@ -1093,72 +1214,7 @@ export default function App() {
       </nav>
 
       <main className="container mx-auto p-3 md:p-4">
-        {/* ================= MODALS ================= */}
-        {verifyModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-blue-800">VERIFY GOODS: {verifyModal.challanNo}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
-                {verifyModal.items.map((item, idx) => (
-                  <label key={idx} className={`flex items-center space-x-3 p-2 md:p-3 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                    <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600 select-text" />
-                    <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800">{item.item_desc}</span>
-                    <span className="text-[13px] md:text-sm font-bold text-right whitespace-nowrap">{getDisplayQty(item.item_desc, item.disp_qty || item.req_qty, item.unit || getUnit(item.item_desc))}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="flex space-x-3">
-                <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black transition-colors">CANCEL</button>
-                <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).every(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {editPOModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
-                {editPOModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
-                  </div>
-                ))}
-              </div>
-              <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {processReturnModal && (
-          <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
-            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
-                {processReturnModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
-                  </div>
-                ))}
-              </div>
-              <div className="flex space-x-3">
-                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
+        
         {/* ================= VIEWS ================= */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
@@ -1207,7 +1263,7 @@ export default function App() {
                       <th className="p-2 md:p-3 text-right border-r border-gray-300 whitespace-nowrap select-text">QTY</th>
                       <th className="p-2 md:p-3 text-center border-r border-gray-300 w-40 md:w-48 select-none whitespace-nowrap">ADMIN NOTE</th>
                       <th className="p-2 md:p-3 text-center w-16 md:w-20 select-none whitespace-nowrap">PDF</th>
-                      {userRole === 'master' && <th className="p-2 md:p-3 text-center w-12 md:w-16 select-none bg-red-100 text-red-800 whitespace-nowrap">DEL</th>}
+                      {userRole === 'master' && <th className="p-2 md:p-3 text-center w-24 md:w-28 select-none bg-gray-200 text-black whitespace-nowrap border-l border-gray-300">MASTER</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1324,8 +1380,11 @@ export default function App() {
                           )}
                         </td>
                         {userRole === 'master' && (
-                          <td className="p-2 md:p-3 text-center vertical-middle select-none border-l border-red-200">
-                             <button onClick={() => deleteLedgerGroup(group.keyField, group.keyValue)} className="text-lg md:text-xl hover:scale-110 active:scale-95 transition-transform" title="Mark Group as Deleted">🗑️</button>
+                          <td className="p-2 md:p-3 text-center vertical-middle select-none border-l border-gray-300">
+                            <div className="flex justify-center gap-2 md:gap-3">
+                               <button onClick={() => { triggerHaptic(20); setMasterEditModal({ keyField: group.keyField, keyValue: group.keyValue, newKeyValue: group.keyValue, items: group.items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
+                               <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
+                            </div>
                           </td>
                         )}
                       </tr>
