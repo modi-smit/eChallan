@@ -73,7 +73,6 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
   
-  // ANTI-DOUBLE-CLICK LOCK
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -98,7 +97,6 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
-  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -124,6 +122,7 @@ export default function App() {
   const [pendingReturns, setPendingReturns] = useState({});
   const [pendingDepotReturns, setPendingDepotReturns] = useState({});
 
+  // THE RESTORED MODALS STATE
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
@@ -134,7 +133,6 @@ export default function App() {
   const [emergencyUrl, setEmergencyUrl] = useState(() => localStorage.getItem('god_emg_url') || '');
 
   const [actionableCount, setActionableCount] = useState(0);
-
   const [toasts, setToasts] = useState([]);
   
   const triggerSystemAlert = (title, body, type = 'success') => {
@@ -157,11 +155,11 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // WATCHDOG TIMER (Prevents Android Black Screen Freezes)
+  // WATCHDOG TIMER
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 3500);
+    }, 4000);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -269,7 +267,6 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
@@ -284,7 +281,6 @@ export default function App() {
           }
         });
       }
-      
       if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
         Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
       }
@@ -445,7 +441,6 @@ export default function App() {
     }
   };
 
-  // --- REBUILT MASTER EDIT (Strict Sorting & Safe Updates) ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -456,7 +451,6 @@ export default function App() {
           const newQty = parseInt(item.edit_qty) || 0;
           
           if (newQty <= 0) {
-              // Exact targeted deletion
               await supabase.from('transactions').delete().eq('id', item.id);
           } else {
               const updatePayload = { 
@@ -465,7 +459,6 @@ export default function App() {
               };
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
-              
               await supabase.from('transactions').update(updatePayload).eq('id', item.id);
           }
         }
@@ -603,7 +596,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PDF ENGINE (Pre-Printed Box Grid & Pagination) ---
+  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Grid & Fixed Pagination) ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
@@ -612,47 +605,62 @@ export default function App() {
     let totalNos = 0;
     
     const drawPageTemplate = () => {
-        // 1. BACKGROUND FILLS
-        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); // Header Fill
-        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); // Table Header Fill
-
-        // 2. MASTER GRID LINES
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-        doc.rect(5, 5, 138, 195); // Master Outer Bounding Box (Runs down entire page)
-        doc.line(5, 21, 143, 21); // Header Bottom Divider
-        doc.line(5, 41, 143, 41); // Table Header Top
-        doc.line(5, 48, 143, 48); // Table Header Bottom
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
         
-        // 3. VERTICAL COLUMN LINES (Explicitly drawn down to Y=175 on every page)
-        const gridEndY = 175; 
-        doc.line(15, 41, 15, gridEndY);   // SR line
-        doc.line(105, 41, 105, gridEndY); // Desc line
-        doc.line(125, 41, 125, gridEndY); // NOS line
-        doc.line(5, gridEndY, 143, gridEndY); // Bottom closure of items area
+        // 1. MASTER OUTER BORDER (148x210mm A5 Page)
+        doc.rect(5, 5, 138, 195); 
 
-        // 4. TOTAL ROW OUTLINE
-        doc.rect(5, 175, 138, 7); 
-        doc.line(105, 175, 105, 182); // Extend description line into total box
-
-        // 5. STATIC TEXT (Header & Metadata)
+        // 2. HEADER
+        doc.setFillColor(235, 235, 235); 
+        doc.rect(5, 5, 138, 16, 'F'); 
+        doc.rect(5, 5, 138, 16); // Redraw border over fill
+        
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         
+        // 3. METADATA
         doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // 6. COLUMN LABELS
+        // 4. TABLE HEADER
+        doc.setFillColor(245, 245, 245); 
+        doc.rect(5, 41, 138, 7, 'F'); 
+        doc.rect(5, 41, 138, 7); // Redraw border over fill
+        
+        // 5. VERTICAL GRID LINES (Drawn explicitly to Y=182, which is bottom of total box)
+        const gridEndY = 182; 
+        doc.line(15, 41, 15, gridEndY);   // SR
+        doc.line(105, 41, 105, gridEndY); // Desc
+        doc.line(125, 41, 125, gridEndY); // NOS
+        
+        // 6. TOTAL ROW HORIZONTAL LINES
+        doc.line(5, 175, 143, 175); // Top of Total Row
+        doc.line(5, 182, 143, 182); // Bottom of Total Row
+
+        // 7. COLUMN LABELS
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
         doc.text("NOS", 115, 46, { align: "center" }); 
         doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
+
+        // 8. SIGNATURE BLOCK (Always at fixed position)
+        const sigY = 191; 
+        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
+        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
+          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
+          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
+        }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
+        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     };
 
     drawPageTemplate();
@@ -666,7 +674,7 @@ export default function App() {
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Pagination Trigger
+      // Page Break Calculation
       if (y + rowHeight > maxY) {
           doc.addPage();
           drawPageTemplate();
@@ -680,34 +688,28 @@ export default function App() {
       doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
-      // Light interior row dividers (won't overwrite outer border)
-      if (index < itemsList.length - 1) { 
-        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
+      // Subtle interior row divider
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
+        doc.setLineWidth(0.1); 
+        doc.setDrawColor(200, 200, 200); 
+        doc.line(5.5, y + rowHeight - 2, 142.5, y + rowHeight - 2); 
         doc.setDrawColor(0, 0, 0); 
       }
       y += rowHeight + 2; 
     });
 
-    // 7. FILL TOTAL BOX (Only populated on the very last page)
-    doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 99.6, 6.6, 'F');
-    doc.rect(105.2, 175.2, 37.6, 6.6, 'F');
+    // 9. FILL TOTAL BOX (Only populated on the very last page)
+    doc.setFillColor(235, 235, 235); 
+    doc.rect(5, 175, 100, 7, 'F'); 
+    doc.rect(105, 175, 38, 7, 'F'); 
+    doc.rect(5, 175, 138, 7); // Redraw borders over fill
+    doc.line(105, 175, 105, 182); 
+
     doc.setFont("helvetica", "bold");
     doc.text("TOTAL", 100, 180, { align: "right" }); 
     doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
-
-    // 8. POPULATE SIGNATURE BLOCK
-    const sigY = 191; 
-    doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
-    if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-      doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
-      doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
-    }
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
-    doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-    doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     
-    // 9. AUTOMATED PAGINATION GENERATOR
+    // 10. AUTOMATED PAGINATION GENERATOR (Page X of Y)
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
@@ -1062,7 +1064,6 @@ export default function App() {
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
-    // Sort Alphabetically
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
     
     setVerifyModal({ 
@@ -1082,7 +1083,6 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // BUGFIX: Use .some() instead of .every() so partial checks don't lock the button!
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
         triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
@@ -1098,7 +1098,6 @@ export default function App() {
         const promises = checkedIndexes.map(async (index) => {
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
-            // Use precise ID targeting
             return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         });
 
@@ -1346,8 +1345,89 @@ export default function App() {
         </div>
       )}
 
+      {/* --- VERIFY MODAL --- */}
+      {verifyModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                <h2 className="text-lg font-bold border-b-2 border-black pb-2 mb-4 uppercase text-blue-800">VERIFY GOODS: {verifyModal.challanNo}</h2>
+                <div className="space-y-2 mb-4 max-h-72 overflow-y-auto pr-2">
+                  <div className="flex text-[11px] font-bold text-gray-500 px-2 uppercase"><span className="w-8 text-center">CHK</span><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 md:w-24 text-center">RCVD QTY</span></div>
+                  {verifyModal.items.map((item, idx) => (
+                    <label key={idx} className={`flex items-center space-x-2 md:space-x-3 p-2 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
+                      <div className="w-8 flex justify-center">
+                          <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600" />
+                      </div>
+                      <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                      <input
+                          type="number"
+                          value={item.edit_qty}
+                          onClick={(e) => e.stopPropagation()} 
+                          onChange={(e) => {
+                              const updated = [...verifyModal.items];
+                              updated[idx] = { ...updated[idx], edit_qty: e.target.value };
+                              setVerifyModal({ ...verifyModal, items: updated });
+                          }}
+                          className="w-20 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="flex space-x-3">
+                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
+                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- EDIT PO MODAL --- */}
+      {editPOModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                {editPOModal.items.map((item, idx) => (
+                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
+                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  </div>
+                ))}
+              </div>
+              <div className="flex space-x-2">
+                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
+              </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- PROCESS RETURN MODAL --- */}
+      {processReturnModal && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
+            <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+              <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                {processReturnModal.items.map((item, idx) => (
+                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-red-50 border border-red-300 p-2">
+                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  </div>
+                ))}
+              </div>
+              <div className="flex space-x-3">
+                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
+              </div>
+            </div>
+        </div>
+      )}
+
       {/* --- CLASSIC SINGLE-LINE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50 shadow-sm">
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
         <div className="container mx-auto flex flex-row justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm">
           
           {/* Left Side Group */}
@@ -1570,7 +1650,7 @@ export default function App() {
                                     keyField: group.keyField, 
                                     keyValue: group.keyValue, 
                                     newKeyValue: group.keyValue, 
-                                    items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) 
+                                    items: sortedItems.map(i => ({ ...i, original_item_desc: i.item_desc, edit_qty: i.disp_qty || i.req_qty })) 
                                   }); 
                                }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
                                <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
