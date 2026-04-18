@@ -134,6 +134,7 @@ export default function App() {
   const [emergencyUrl, setEmergencyUrl] = useState(() => localStorage.getItem('god_emg_url') || '');
 
   const [actionableCount, setActionableCount] = useState(0);
+
   const [toasts, setToasts] = useState([]);
   
   const triggerSystemAlert = (title, body, type = 'success') => {
@@ -160,7 +161,7 @@ export default function App() {
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 4000);
+    }, 3500);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -444,7 +445,7 @@ export default function App() {
     }
   };
 
-  // --- REBUILT MASTER EDIT (Targeted by group_id and item_desc) ---
+  // --- REBUILT MASTER EDIT (Strict Sorting & Safe Updates) ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -455,9 +456,8 @@ export default function App() {
           const newQty = parseInt(item.edit_qty) || 0;
           
           if (newQty <= 0) {
-              await supabase.from('transactions').delete()
-                  .eq('group_id', item.group_id)
-                  .eq('item_desc', item.original_item_desc);
+              // Exact targeted deletion
+              await supabase.from('transactions').delete().eq('id', item.id);
           } else {
               const updatePayload = { 
                   item_desc: cleanDesc(item.item_desc),
@@ -466,9 +466,7 @@ export default function App() {
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
               
-              await supabase.from('transactions').update(updatePayload)
-                  .eq('group_id', item.group_id)
-                  .eq('item_desc', item.original_item_desc);
+              await supabase.from('transactions').update(updatePayload).eq('id', item.id);
           }
         }
         setMasterEditModal(null);
@@ -605,7 +603,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Box Grid & Pagination) ---
+  // --- REBUILT PDF ENGINE (Pre-Printed Box Grid & Pagination) ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
@@ -614,51 +612,41 @@ export default function App() {
     let totalNos = 0;
     
     const drawPageTemplate = () => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // 1. MASTER OUTER BORDER (148x210mm A5 Page, 5mm Margins)
-        doc.rect(5, 5, 138, 195, 'S'); 
+        // 1. BACKGROUND FILLS
+        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); // Header Fill
+        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); // Table Header Fill
 
-        // 2. HEADER BLOCK
-        doc.setFillColor(235, 235, 235); 
-        doc.rect(5.2, 5.2, 137.6, 15.6, 'F'); 
-        
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
-        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); 
-        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        
-        doc.setDrawColor(0, 0, 0);
+        // 2. MASTER GRID LINES
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.rect(5, 5, 138, 195); // Master Outer Bounding Box (Runs down entire page)
         doc.line(5, 21, 143, 21); // Header Bottom Divider
+        doc.line(5, 41, 143, 41); // Table Header Top
+        doc.line(5, 48, 143, 48); // Table Header Bottom
         
-        // 3. METADATA BLOCK
-        doc.setFontSize(9);
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-        
-        // 4. TABLE HEADER BLOCK
-        doc.setFillColor(245, 245, 245); 
-        doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
-        
-        doc.setDrawColor(0, 0, 0);
-        doc.line(5, 41, 143, 41); // Top of Header
-        doc.line(5, 48, 143, 48); // Bottom of Header
-        
-        // 5. VERTICAL GRID LINES (Drawn explicitly to Y=175 on every page)
+        // 3. VERTICAL COLUMN LINES (Explicitly drawn down to Y=175 on every page)
         const gridEndY = 175; 
         doc.line(15, 41, 15, gridEndY);   // SR line
         doc.line(105, 41, 105, gridEndY); // Desc line
         doc.line(125, 41, 125, gridEndY); // NOS line
         doc.line(5, gridEndY, 143, gridEndY); // Bottom closure of items area
 
-        // 6. TOTAL ROW OUTLINE
-        doc.rect(5, 175, 138, 7, 'S'); 
+        // 4. TOTAL ROW OUTLINE
+        doc.rect(5, 175, 138, 7); 
         doc.line(105, 175, 105, 182); // Extend description line into total box
 
-        // 7. COLUMN LABELS
+        // 5. STATIC TEXT (Header & Metadata)
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); 
+        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        
+        doc.setFontSize(9);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        
+        // 6. COLUMN LABELS
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
@@ -678,7 +666,7 @@ export default function App() {
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Page Break Calculation
+      // Pagination Trigger
       if (y + rowHeight > maxY) {
           doc.addPage();
           drawPageTemplate();
@@ -692,24 +680,23 @@ export default function App() {
       doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
-      // Light interior row dividers
+      // Light interior row dividers (won't overwrite outer border)
       if (index < itemsList.length - 1) { 
-        doc.setLineWidth(0.1); 
-        doc.setDrawColor(200, 200, 200); 
+        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
         doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
         doc.setDrawColor(0, 0, 0); 
       }
       y += rowHeight + 2; 
     });
 
-    // 8. POPULATE TOTAL BOX (Only visible on last page)
+    // 7. FILL TOTAL BOX (Only populated on the very last page)
     doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 99.6, 6.6, 'F');
     doc.rect(105.2, 175.2, 37.6, 6.6, 'F');
     doc.setFont("helvetica", "bold");
     doc.text("TOTAL", 100, 180, { align: "right" }); 
     doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
 
-    // 9. POPULATE SIGNATURE BLOCK
+    // 8. POPULATE SIGNATURE BLOCK
     const sigY = 191; 
     doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
@@ -720,7 +707,7 @@ export default function App() {
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     
-    // 10. GENERATE AUTOMATED PAGINATION
+    // 9. AUTOMATED PAGINATION GENERATOR
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
@@ -1071,13 +1058,16 @@ export default function App() {
     }
   };
 
-  // --- REBUILT VERIFICATION LOGIC (ASYNC LOCKS & EDITABLE QTY) ---
+  // --- REBUILT VERIFICATION LOGIC ---
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
+    // Sort Alphabetically
+    const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+    
     setVerifyModal({ 
       challanNo, 
-      items: items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
+      items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
       checks, 
       isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
     });
@@ -1092,7 +1082,7 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // Allow partial verification using .some()
+    // BUGFIX: Use .some() instead of .every() so partial checks don't lock the button!
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
         triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
@@ -1108,8 +1098,8 @@ export default function App() {
         const promises = checkedIndexes.map(async (index) => {
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
-            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty })
-                   .eq('challan_no', verifyModal.challanNo).eq('item_desc', item.item_desc);
+            // Use precise ID targeting
+            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         });
 
         await Promise.all(promises);
@@ -1123,11 +1113,13 @@ export default function App() {
     }
   };
 
-  // --- REBUILT DISPATCH PO LOGIC (DEEP CLONING) ---
+  // --- REBUILT DISPATCH PO LOGIC ---
   const openEditPOModal = (groupId, items) => { 
       triggerHaptic(30);
-      setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+      const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+      setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
+  
   const handleEditPOQty = (index, val) => { 
       const updated = [...editPOModal.items]; 
       updated[index] = { ...updated[index], edit_qty: val }; 
@@ -1152,11 +1144,11 @@ export default function App() {
           const reqQty = parseInt(item.req_qty) || 0;
 
           if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('group_id', editPOModal.groupId).eq('item_desc', item.item_desc); 
+              await supabase.from('transactions').delete().eq('id', item.id); 
               continue; 
           }
           
-          await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('group_id', editPOModal.groupId).eq('item_desc', item.item_desc); 
+          await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
           
           if (dispatchQty < reqQty) { 
@@ -1180,8 +1172,10 @@ export default function App() {
 
   const openProcessReturnModal = (groupId, items) => { 
       triggerHaptic(30);
-      setProcessReturnModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+      const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+      setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
+  
   const handleProcessReturnQty = (index, val) => { 
       const updated = [...processReturnModal.items]; 
       updated[index] = { ...updated[index], edit_qty: val }; 
@@ -1206,11 +1200,11 @@ export default function App() {
           const reqQty = parseInt(item.req_qty) || 0;
 
           if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('group_id', processReturnModal.groupId).eq('item_desc', item.item_desc); 
+              await supabase.from('transactions').delete().eq('id', item.id); 
               continue; 
           }
 
-          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('group_id', processReturnModal.groupId).eq('item_desc', item.item_desc); 
+          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
           
           if (dispatchQty < reqQty) { 
@@ -1353,42 +1347,48 @@ export default function App() {
       )}
 
       {/* --- CLASSIC SINGLE-LINE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs md:text-sm">
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex flex-row justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm">
           
-          <div className="flex items-center gap-2">
-            <span className="tracking-widest truncate max-w-[100px] md:max-w-none">GOD</span>
+          {/* Left Side Group */}
+          <div className="flex items-center gap-1 md:gap-2">
+            <span className="tracking-widest hidden sm:inline">Gujarat Oil Depot</span>
+            <span className="tracking-widest sm:hidden text-xs">GOD</span>
+            
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
                 else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-            }} className="hover:scale-110 transition-transform text-base md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            
             {actionableCount > 0 && (
               <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
               </span>
             )}
-            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[9px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            
+            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-base md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
           
-          <div className="flex gap-2 items-center">
+          {/* Right Side Group */}
+          <div className="flex flex-row gap-1 md:gap-2 items-center">
             {userRole && (
-              <div className="p-1 flex gap-1 rounded bg-gray-700">
+              <div className="p-0.5 md:p-1 flex flex-row gap-0.5 md:gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[8px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1460,11 +1460,9 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {}))
-                    // SORT GROUPS BY CHALLAN NO DESCENDING
                     .sort((a, b) => String(b.keyValue).localeCompare(String(a.keyValue))) 
                     .map((group, idx) => {
                       
-                      // ALPHABETICAL SORT INSIDE GROUP
                       const sortedItems = [...group.items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
@@ -1572,7 +1570,7 @@ export default function App() {
                                     keyField: group.keyField, 
                                     keyValue: group.keyValue, 
                                     newKeyValue: group.keyValue, 
-                                    items: sortedItems.map(i => ({ ...i, original_item_desc: i.item_desc, edit_qty: i.disp_qty || i.req_qty })) 
+                                    items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) 
                                   }); 
                                }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
                                <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
