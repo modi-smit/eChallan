@@ -73,6 +73,7 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
   
+  // ANTI-DOUBLE-CLICK LOCK
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -97,6 +98,7 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
+  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -442,6 +444,7 @@ export default function App() {
     }
   };
 
+  // --- REBUILT MASTER EDIT (Targeted by group_id and item_desc) ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -452,7 +455,9 @@ export default function App() {
           const newQty = parseInt(item.edit_qty) || 0;
           
           if (newQty <= 0) {
-              await supabase.from('transactions').delete().eq('id', item.id);
+              await supabase.from('transactions').delete()
+                  .eq('group_id', item.group_id)
+                  .eq('item_desc', item.original_item_desc);
           } else {
               const updatePayload = { 
                   item_desc: cleanDesc(item.item_desc),
@@ -460,7 +465,10 @@ export default function App() {
               };
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
-              await supabase.from('transactions').update(updatePayload).eq('id', item.id);
+              
+              await supabase.from('transactions').update(updatePayload)
+                  .eq('group_id', item.group_id)
+                  .eq('item_desc', item.original_item_desc);
           }
         }
         setMasterEditModal(null);
@@ -597,7 +605,7 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PDF ENGINE (Pre-Printed Grid & Pagination) ---
+  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Box Grid & Pagination) ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
@@ -609,7 +617,7 @@ export default function App() {
         doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.4);
         
-        // 1. MASTER OUTER BORDER (Drawn fully on every page)
+        // 1. MASTER OUTER BORDER (148x210mm A5 Page, 5mm Margins)
         doc.rect(5, 5, 138, 195, 'S'); 
 
         // 2. HEADER BLOCK
@@ -718,7 +726,7 @@ export default function App() {
         doc.setPage(i);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+        doc.text(`Page ${i} of ${totalPages}`, 140, 204, { align: "right" });
     }
 
     doc.save(`${challanNo}.pdf`);
@@ -1084,7 +1092,7 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // BUGFIX: Allow partial verification. User must check at least one box to proceed.
+    // Allow partial verification using .some()
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
         triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
@@ -1100,7 +1108,8 @@ export default function App() {
         const promises = checkedIndexes.map(async (index) => {
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
-            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
+            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty })
+                   .eq('challan_no', verifyModal.challanNo).eq('item_desc', item.item_desc);
         });
 
         await Promise.all(promises);
@@ -1143,11 +1152,11 @@ export default function App() {
           const reqQty = parseInt(item.req_qty) || 0;
 
           if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
+              await supabase.from('transactions').delete().eq('group_id', editPOModal.groupId).eq('item_desc', item.item_desc); 
               continue; 
           }
           
-          await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
+          await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('group_id', editPOModal.groupId).eq('item_desc', item.item_desc); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
           
           if (dispatchQty < reqQty) { 
@@ -1197,11 +1206,11 @@ export default function App() {
           const reqQty = parseInt(item.req_qty) || 0;
 
           if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
+              await supabase.from('transactions').delete().eq('group_id', processReturnModal.groupId).eq('item_desc', item.item_desc); 
               continue; 
           }
 
-          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
+          await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('group_id', processReturnModal.groupId).eq('item_desc', item.item_desc); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
           
           if (dispatchQty < reqQty) { 
@@ -1314,7 +1323,7 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
-              
+
               <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
@@ -1451,11 +1460,12 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {}))
-                    .sort((a, b) => b.keyValue.localeCompare(a.keyValue)) 
+                    // SORT GROUPS BY CHALLAN NO DESCENDING
+                    .sort((a, b) => String(b.keyValue).localeCompare(String(a.keyValue))) 
                     .map((group, idx) => {
                       
-                      // ALPHABETICAL SORT
-                      const sortedItems = [...group.items].sort((a,b) => (a.item_desc || '').localeCompare(b.item_desc || ''));
+                      // ALPHABETICAL SORT INSIDE GROUP
+                      const sortedItems = [...group.items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
                       const hiddenCount = sortedItems.length - 3;
@@ -1562,7 +1572,7 @@ export default function App() {
                                     keyField: group.keyField, 
                                     keyValue: group.keyValue, 
                                     newKeyValue: group.keyValue, 
-                                    items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) 
+                                    items: sortedItems.map(i => ({ ...i, original_item_desc: i.item_desc, edit_qty: i.disp_qty || i.req_qty })) 
                                   }); 
                                }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
                                <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
