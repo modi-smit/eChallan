@@ -73,7 +73,6 @@ export default function App() {
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
   
-  // ANTI-DOUBLE-CLICK LOCK
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -98,7 +97,6 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
-  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -128,7 +126,6 @@ export default function App() {
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
 
-  // --- MASTER ROLE MODALS ---
   const [deleteModal, setDeleteModal] = useState(null);
   const [masterEditModal, setMasterEditModal] = useState(null);
   const [settingsModal, setSettingsModal] = useState(false);
@@ -136,7 +133,6 @@ export default function App() {
 
   const [actionableCount, setActionableCount] = useState(0);
 
-  // --- IN-APP TOAST SYSTEM ---
   const [toasts, setToasts] = useState([]);
   
   const triggerSystemAlert = (title, body, type = 'success') => {
@@ -152,7 +148,6 @@ export default function App() {
     }
   };
 
-  // Focus Refs
   const depotSearchRef = useRef(null);
   const depotQtyRef = useRef(null);
   const retailSearchRef = useRef(null);
@@ -160,7 +155,6 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // ANTI-FREEZE WATCHDOG
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
@@ -272,7 +266,6 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
@@ -281,14 +274,12 @@ export default function App() {
             notifyButton: { enable: true },
           });
           OneSignal.User.PushSubscription.optIn();
-          
           const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
           if (roleData && roleData.role) {
              OneSignal.User.addTag("role", roleData.role.toLowerCase().trim());
           }
         });
       }
-      
       if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
         Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
       }
@@ -451,14 +442,20 @@ export default function App() {
 
     for (const item of masterEditModal.items) {
       const newQty = parseInt(item.edit_qty) || 0;
-      const updatePayload = { 
-          [masterEditModal.keyField]: masterEditModal.newKeyValue,
-          item_desc: cleanDesc(item.item_desc),
-          unit: getUnit(item.item_desc) 
-      };
-      if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
-      if (item.req_qty !== null) updatePayload.req_qty = newQty;
-      await supabase.from('transactions').update(updatePayload).eq('id', item.id);
+      
+      // ENTERPRISE ZERO-CULLING RULE
+      if (newQty === 0) {
+          await supabase.from('transactions').delete().eq('id', item.id);
+      } else {
+          const updatePayload = { 
+              [masterEditModal.keyField]: masterEditModal.newKeyValue,
+              item_desc: cleanDesc(item.item_desc),
+              unit: getUnit(item.item_desc) 
+          };
+          if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
+          if (item.req_qty !== null) updatePayload.req_qty = newQty;
+          await supabase.from('transactions').update(updatePayload).eq('id', item.id);
+      }
     }
 
     setIsProcessing(false);
@@ -591,14 +588,14 @@ export default function App() {
     return results.slice(0, 50);
   };
 
+  // --- REWRITTEN ENTERPRISE PDF ENGINE (Perfect Bounding & Alignment) ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = challanNo.startsWith('RT');
     const txTimestamp = (itemsList.length > 0 && itemsList[0].timestamp) ? new Date(itemsList[0].timestamp) : new Date();
     
     let totalNos = 0;
     
-    const drawPageTemplate = (isFirstPage) => {
-        if (!isFirstPage) doc.addPage();
+    const drawPageTemplate = () => {
         doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
@@ -611,14 +608,22 @@ export default function App() {
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 110, 46, { align: "right" }); 
+        doc.text("NOS", 112, 46, { align: "right" }); 
         doc.text("QTY", 140, 46, { align: "right" });
         doc.setFont("helvetica", "normal");
     };
 
-    drawPageTemplate(true);
+    const closePageGrid = (bottomY) => {
+        doc.setLineWidth(0.4);
+        doc.line(5, bottomY, 143, bottomY); // Bottom line
+        doc.line(15, 41, 15, bottomY); // Vertical 1
+        doc.line(100, 41, 100, bottomY); // Vertical 2
+        doc.line(120, 41, 120, bottomY); // Vertical 3
+        doc.rect(5, 5, 138, bottomY - 5); // Full page bounding box
+    };
+
+    drawPageTemplate();
     let y = 53;
-    let startY = 41;
 
     itemsList.forEach((item, index) => {
       const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 75); 
@@ -626,17 +631,17 @@ export default function App() {
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
+      // Page Break Trigger
       if (y + rowHeight > 185) {
-          doc.setLineWidth(0.4); doc.line(5, y - 2, 143, y - 2);
-          doc.line(15, startY, 15, y - 2); doc.line(97, startY, 97, y - 2); doc.line(112, startY, 112, y - 2);
-          doc.line(5, startY, 5, y - 2); doc.line(143, startY, 143, y - 2);
-          drawPageTemplate(false);
+          closePageGrid(y - 2); // Close the current page border
+          doc.addPage();
+          drawPageTemplate();
           y = 53;
       }
 
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
       doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 110, y, { align: "right" }); 
+      doc.text(paddedQty, 112, y, { align: "right" }); 
       doc.setFontSize(8); 
       doc.text(displayStr, 140, y, { align: "right" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
@@ -646,13 +651,13 @@ export default function App() {
     });
 
     const tableBottom = Math.max(y - 1, 165); doc.setFillColor(235, 235, 235); doc.rect(5.2, tableBottom + 0.2, 137.6, 5.6, 'F');
-    doc.setLineWidth(0.4); doc.line(5, tableBottom, 143, tableBottom); doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 92, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 110, tableBottom + 4.2, { align: "right" });
-    doc.line(5, tableBottom + 6, 143, tableBottom + 6);
-    doc.line(15, startY, 15, tableBottom + 6); doc.line(97, startY, 97, tableBottom + 6); doc.line(112, startY, 112, tableBottom + 6);
-    doc.line(5, startY, 5, tableBottom + 6); doc.line(143, startY, 143, tableBottom + 6); 
+    closePageGrid(tableBottom + 6); // Close final page grid
+    
+    doc.setLineWidth(0.4); doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 96, tableBottom + 4.2, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 112, tableBottom + 4.2, { align: "right" });
 
-    const sigY = 183; doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
+    const sigY = tableBottom + 12 < 190 ? tableBottom + 12 : 190; 
+    doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
       doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY + 6); 
       doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 10);
@@ -660,7 +665,7 @@ export default function App() {
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 6, { align: "right" });
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 4, { align: "right" });
-    doc.setLineWidth(0.4); doc.rect(5, 5, 138, 195); doc.save(`${challanNo}.pdf`);
+    doc.save(`${challanNo}.pdf`);
   };
 
   const handleFileUpload = async (event) => {
@@ -996,12 +1001,11 @@ export default function App() {
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
-    // Ensure the input field shows the expected received quantity by default
     setVerifyModal({ 
       challanNo, 
       items: items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
       checks, 
-      isDepotReturn: challanNo.startsWith('RT') 
+      isDepotReturn: challanNo ? challanNo.startsWith('RT') : false
     });
   };
 
@@ -1018,7 +1022,6 @@ export default function App() {
     setIsProcessing(true);
     const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     
-    // Process items with potentially altered quantities
     for (let i = 0; i < verifyModal.items.length; i++) {
         if (verifyModal.checks[i]) {
             const item = verifyModal.items[i];
@@ -1210,48 +1213,44 @@ export default function App() {
       )}
 
       {/* --- RESPONSIVE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex flex-col md:flex-row justify-between items-center font-bold uppercase text-sm gap-3 md:gap-0">
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-[10px] md:text-sm">
           
-          <div className="flex justify-between items-center w-full md:w-auto">
-            <div className="relative flex items-center">
-              <span className="tracking-widest">Gujarat Oil Depot</span>
-              <button onClick={() => {
-                  triggerHaptic(50);
-                  if (emergencyUrl) window.open(emergencyUrl, '_blank');
-                  else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-              }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
-              {actionableCount > 0 && (
-                <span className="absolute -top-1 -right-3 flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-                </span>
-              )}
-            </div>
-            <div className="flex items-center">
-               {!isOnline && <span className="ml-4 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
-               {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC (${offlineQueue.length})`}</span>}
-               
-               {/* SETTINGS ICON FOR MASTER */}
-               {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-3 text-gray-400 hover:text-white transition-colors text-lg" title="System Settings">⚙️</button>
-               )}
-            </div>
+          <div className="flex items-center gap-1 md:gap-2">
+            <span className="tracking-widest truncate max-w-[120px] md:max-w-none">Gujarat Oil Depot</span>
+            <button onClick={() => {
+                triggerHaptic(50);
+                if (emergencyUrl) window.open(emergencyUrl, '_blank');
+                else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
+            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            {actionableCount > 0 && (
+              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -mt-3 -ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
+              </span>
+            )}
+            {!isOnline && <span className="ml-2 md:ml-4 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            {isOnline && offlineQueue.length > 0 && <span className="ml-1 md:ml-2 bg-yellow-500 text-black px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC (${offlineQueue.length})`}</span>}
+            
+            {/* SETTINGS ICON FOR MASTER */}
+            {(userRole === 'admin' || userRole === 'master') && (
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+            )}
           </div>
           
-          <div className="flex flex-wrap justify-center gap-2 items-center w-full md:w-auto">
+          <div className="flex gap-1 md:gap-2 items-center">
             {userRole && (
-              <div className="p-1 flex gap-1 rounded bg-gray-700 w-full md:w-auto justify-center">
+              <div className="p-0.5 md:p-1 flex gap-0.5 md:gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700 transition-colors w-full md:w-auto">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[9px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1324,10 +1323,11 @@ export default function App() {
                       acc[key].items.push(row); return acc;
                     }, {})).sort((a, b) => new Date(b.date) - new Date(a.date)).map((group, idx) => {
                       
-                      // SMART ACCORDION LOGIC
+                      // ALPHABETICAL SORT
+                      const sortedItems = [...group.items].sort((a,b) => a.item_desc.localeCompare(b.item_desc));
                       const isExpanded = expandedGroups[group.keyValue];
-                      const visibleItems = isExpanded ? group.items : group.items.slice(0, 3);
-                      const hiddenCount = group.items.length - 3;
+                      const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
+                      const hiddenCount = sortedItems.length - 3;
 
                       return (
                       <tr key={idx} className={`border-b border-gray-300 align-top hover:bg-gray-50 transition-colors ${group.status === 'DELETED' ? 'bg-gray-200 opacity-60' : group.status === 'ACCEPTED' ? 'bg-green-50' : group.status === 'RETURN_ACCEPTED' ? 'bg-red-50' : 'bg-blue-50'} select-text`}>
