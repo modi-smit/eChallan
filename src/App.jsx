@@ -98,7 +98,6 @@ export default function App() {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
   
-  // SMART ACCORDION STATE
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -157,10 +156,11 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
+  // Watchdog Timeout (Faster, cleaner load state)
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 4500);
+    }, 3500);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -272,7 +272,7 @@ export default function App() {
       if (window.OneSignalDeferred) {
         window.OneSignalDeferred.push(async function(OneSignal) {
           await OneSignal.init({
-            appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
+            appId: "YOUR_ONESIGNAL_APP_ID_HERE", // <-- Ensure your App ID is here
             safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
             notifyButton: { enable: true },
           });
@@ -448,10 +448,10 @@ export default function App() {
       const newQty = parseInt(item.edit_qty) || 0;
       
       if (newQty === 0) {
+          // Zero-QTY hard cull
           await supabase.from('transactions').delete().eq('id', item.id);
       } else {
           const updatePayload = { 
-              [masterEditModal.keyField]: masterEditModal.newKeyValue,
               item_desc: cleanDesc(item.item_desc),
               unit: getUnit(item.item_desc) 
           };
@@ -463,7 +463,7 @@ export default function App() {
 
     setIsProcessing(false);
     setMasterEditModal(null);
-    triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.newKeyValue}`, "success");
+    triggerSystemAlert("Record Updated", `Successfully modified ${masterEditModal.keyValue}`, "success");
     refreshAllData();
   };
 
@@ -591,56 +591,73 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PRE-PRINTED PDF ENGINE ---
+  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Grid & Pagination) ---
   const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); const isReturn = String(challanNo).startsWith('RT');
+    const doc = new jsPDF({ format: 'a5' }); 
+    const isReturn = String(challanNo).startsWith('RT');
     const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
     
     let totalNos = 0;
     
     const drawPageTemplate = () => {
         doc.setLineWidth(0.4);
+        
+        // Master Outer Box
         doc.rect(5, 5, 138, 195); 
 
-        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); 
-        doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        // Header Background
+        doc.setFillColor(235, 235, 235); 
+        doc.rect(5, 5, 138, 16, 'F'); 
         
+        // Header Text
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); 
+        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        
+        // Header Bottom Line
         doc.line(5, 21, 143, 21); 
         
+        // Metadata Text
         doc.setFontSize(9);
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(challanNo, 32, 27);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        doc.setFillColor(245, 245, 245); doc.rect(5.2, 41.2, 137.6, 6.6, 'F'); 
+        // Table Header Area
+        doc.setFillColor(245, 245, 245); 
+        doc.rect(5, 41, 138, 7, 'F'); 
+        
+        // Table Header Lines
         doc.line(5, 41, 143, 41); 
         doc.line(5, 48, 143, 48); 
         
+        // Vertical Grid Lines (Drawn all the way down to Y=175)
         const gridEndY = 175; 
-        doc.line(15, 41, 15, gridEndY); 
-        doc.line(100, 41, 100, gridEndY); 
-        doc.line(120, 41, 120, gridEndY); 
-        doc.line(5, gridEndY, 143, gridEndY); 
+        doc.line(15, 41, 15, gridEndY);  // SR line
+        doc.line(105, 41, 105, gridEndY); // Description line
+        doc.line(125, 41, 125, gridEndY); // NOS line
+        doc.line(5, gridEndY, 143, gridEndY); // Bottom of items boundary
 
-        doc.rect(5, 175, 138, 7); 
-        doc.line(100, 175, 100, 182); 
-        doc.line(5, 182, 143, 182); 
+        // Total Box & Signature Grid setup
+        doc.rect(5, 175, 138, 7); // Total Box Outline
+        doc.line(105, 175, 105, 182); // Extend description line down through Total box
 
+        // Table Column Labels
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 110, 46, { align: "right" }); 
-        doc.text("QTY", 140, 46, { align: "right" });
+        doc.text("NOS", 115, 46, { align: "center" }); 
+        doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
     };
 
     drawPageTemplate();
     let y = 53;
-    const maxY = 165; 
+    const maxY = 173; // Threshold before creating a new page
 
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 75); 
+      const desc = item.description || item.item_desc; const splitDesc = doc.splitTextToSize(desc, 85); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
@@ -653,24 +670,28 @@ export default function App() {
 
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
       doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 110, y, { align: "right" }); 
+      doc.text(paddedQty, 115, y, { align: "center" }); 
       doc.setFontSize(8); 
-      doc.text(displayStr, 140, y, { align: "right" });
+      doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
+      // Light gray row divider for readability (doesn't overwrite outer border)
       if (index < itemsList.length - 1) { 
-        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-        doc.line(5, y + rowHeight - 2, 143, y + rowHeight - 2); 
-        doc.setDrawColor(0, 0, 0); 
+        doc.setLineWidth(0.1); 
+        doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
+        doc.setDrawColor(0, 0, 0); // Reset stroke to black
       }
       y += rowHeight + 2; 
     });
 
+    // Populate TOTAL Box
     doc.setFillColor(235, 235, 235); doc.rect(5.2, 175.2, 137.6, 6.6, 'F');
     doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 96, 180, { align: "right" }); 
-    doc.text(String(totalNos).padStart(2, '0'), 110, 180, { align: "right" });
+    doc.text("TOTAL", 100, 180, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
 
+    // Populate SIGNATURE Area
     const sigY = 191; 
     doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
     if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
@@ -681,12 +702,13 @@ export default function App() {
     doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
     doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     
+    // PAGINATION LOGIC (Page 1 of X)
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+        doc.text(`Page ${i} of ${totalPages}`, 140, 204, { align: "right" });
     }
 
     doc.save(`${challanNo}.pdf`);
@@ -1022,6 +1044,7 @@ export default function App() {
     }
   };
 
+  // --- REBUILT VERIFICATION LOGIC ---
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
@@ -1038,28 +1061,25 @@ export default function App() {
       setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
   };
 
-  // --- REWRITTEN ASYNC VERIFICATION ENGINE ---
-  const verifyDelivery = async () => {
-    if (!isOnline) { alert("You must be online to verify and accept deliveries."); return; }
+  const acceptDelivery = async () => {
+    if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
-    
+
+    // Ensure at least one item is checked before processing
+    const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
+    if (checkedIndexes.length === 0) {
+        triggerSystemAlert("Action Required", "Please select at least one item to verify.", "warning");
+        return;
+    }
+
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
-    
     const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
     
-    // Batch update to prevent race conditions
-    const promises = Object.entries(verifyModal.checks).map(async ([index, isChecked]) => {
-        if (isChecked) {
-            const item = verifyModal.items[index];
-            const finalQty = parseInt(item.edit_qty) || item.req_qty;
-            return supabase.from('transactions').update({ 
-                status: newStatus, 
-                disp_qty: finalQty, 
-                req_qty: finalQty 
-            }).eq('id', item.id);
-        }
-        return Promise.resolve();
+    const promises = checkedIndexes.map(async (index) => {
+        const item = verifyModal.items[index];
+        const finalQty = parseInt(item.edit_qty) || 0;
+        return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
     });
 
     await Promise.all(promises);
@@ -1067,9 +1087,10 @@ export default function App() {
     setIsProcessing(false);
     setVerifyModal(null); 
     refreshAllData();
-    triggerSystemAlert("Accepted", `Challan ${verifyModal.challanNo} verified.`, "success");
+    triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
   };
 
+  // --- REBUILT DISPATCH PO LOGIC ---
   const openEditPOModal = (groupId, items) => { 
       triggerHaptic(30);
       setEditPOModal({ groupId, items: items.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
@@ -1077,25 +1098,41 @@ export default function App() {
   const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index].edit_qty = val; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
-    if (!isOnline) { alert("You must be online to process and dispatch Purchase Orders."); return; }
+    if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!editPOModal || isProcessing) return; 
     
     triggerHaptic([40, 40, 100]);
     setIsProcessing(true);
     
-    const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = [];
+    const challanNo = await getNextSequence('CN'); 
+    const backorders = []; 
+    const printItems = [];
+
     for (const item of editPOModal.items) {
-      const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty);
-      if (dispatchQty === 0) { await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); continue; }
-      if (dispatchQty > 0) { await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); printItems.push({ ...item, disp_qty: dispatchQty }); }
-      if (dispatchQty < reqQty) { const newPO = await getNextSequence('PO'); backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); }
+      const dispatchQty = parseInt(item.edit_qty) || 0; 
+      const reqQty = parseInt(item.req_qty);
+
+      if (dispatchQty === 0) { 
+          await supabase.from('transactions').update({ status: 'DELETED' }).eq('id', item.id); 
+          continue; 
+      }
+      if (dispatchQty > 0) { 
+          await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
+          printItems.push({ ...item, disp_qty: dispatchQty }); 
+      }
+      if (dispatchQty < reqQty) { 
+          const newPO = await getNextSequence('PO'); 
+          backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
+      }
     }
+
     if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
     if (printItems.length > 0) printPDF(challanNo, printItems);
     
     setIsProcessing(false);
     setEditPOModal(null); 
     refreshAllData();
+    triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
   };
 
   const openProcessReturnModal = (groupId, items) => { 
@@ -1105,7 +1142,7 @@ export default function App() {
   const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index].edit_qty = val; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
-    if (!isOnline) { alert("You must be online to process return requests."); return; }
+    if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!processReturnModal || isProcessing) return; 
     
     triggerHaptic([40, 40, 100]);
@@ -1126,12 +1163,12 @@ export default function App() {
     refreshAllData();
   };
 
+  // --- FAST UI INITIALIZATION ---
   if (loadingAuth) return (
-    <div className="min-h-screen bg-gray-200 p-3 md:p-4 font-sans flex flex-col gap-4 select-none">
-      <div className="h-14 bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
-      <div className="flex flex-col md:flex-row gap-4">
-        <div className="w-full md:w-1/2 h-[60vh] bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
-        <div className="w-full md:w-1/2 h-[60vh] bg-gray-300 border-2 border-gray-400 animate-pulse shadow-sm"></div>
+    <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
+      <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
+          <div className="text-gray-800 font-black tracking-widest animate-pulse uppercase text-lg">INITIALIZING SYSTEM...</div>
+          <div className="text-xs font-bold text-gray-500 mt-2 uppercase">Connecting to Database</div>
       </div>
     </div>
   );
@@ -1152,6 +1189,9 @@ export default function App() {
 
   const hasRetailInbox = Object.keys(incomingDeliveries).length > 0 || Object.keys(pendingDepotReturns).length > 0 || Object.keys(pendingPOs).length > 0;
   const hasDepotInbox = Object.keys(pendingPOs).length > 0 || Object.keys(pendingReturns).length > 0;
+
+  // Check if any verify boxes are checked to enable the button
+  const anyVerifyChecked = verifyModal ? Object.values(verifyModal.checks).some(Boolean) : false;
 
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
@@ -1218,12 +1258,7 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
               
-              <div className="mb-4">
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1 uppercase">Challan / PO Number</label>
-                  <input type="text" value={masterEditModal.newKeyValue} onChange={(e) => setMasterEditModal({...masterEditModal, newKeyValue: e.target.value.toUpperCase()})} className="w-full border-2 border-black p-2 md:p-3 text-[13px] md:text-sm font-bold focus:outline-none focus:bg-yellow-50 select-text transition-colors" />
-              </div>
-
-              <div className="space-y-2 mb-4 md:mb-6 max-h-56 overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
                   <div key={idx} className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 bg-gray-100 border border-gray-300 p-2">
@@ -1240,56 +1275,51 @@ export default function App() {
                 </datalist>
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
                 <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
               </div>
             </div>
         </div>
       )}
 
-      {/* --- RESPONSIVE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50">
-        <div className="container mx-auto flex flex-col md:flex-row justify-between items-center font-bold uppercase text-[10px] md:text-sm gap-3 md:gap-0">
+      {/* --- SLIM MOBILE NAVIGATION BAR --- */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex justify-between items-center w-full font-bold uppercase text-[10px] md:text-sm">
           
-          <div className="flex justify-between items-center w-full md:w-auto">
-            <div className="relative flex items-center">
-              <span className="tracking-widest">Gujarat Oil Depot</span>
-              <button onClick={() => {
-                  triggerHaptic(50);
-                  if (emergencyUrl) window.open(emergencyUrl, '_blank');
-                  else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-              }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
-              {actionableCount > 0 && (
-                <span className="absolute -top-1 -right-3 flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-                </span>
-              )}
-            </div>
-            <div className="flex items-center">
-               {!isOnline && <span className="ml-4 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
-               {isOnline && offlineQueue.length > 0 && <span className="ml-2 bg-yellow-500 text-black px-2 py-0.5 rounded text-[10px] font-black cursor-pointer shadow-sm border border-yellow-700" onClick={syncOfflineQueue}>{isSyncing ? 'SYNCING...' : `SYNC (${offlineQueue.length})`}</span>}
-               
-               {/* SETTINGS ICON FOR MASTER */}
-               {(userRole === 'admin' || userRole === 'master') && (
-                  <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-3 text-gray-400 hover:text-white transition-colors text-lg" title="System Settings">⚙️</button>
-               )}
-            </div>
+          <div className="flex items-center gap-1 md:gap-2">
+            <span className="tracking-widest whitespace-nowrap">GOD</span>
+            <button onClick={() => {
+                triggerHaptic(50);
+                if (emergencyUrl) window.open(emergencyUrl, '_blank');
+                else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
+            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            {actionableCount > 0 && (
+              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -mt-3 -ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
+              </span>
+            )}
+            {!isOnline && <span className="ml-1 md:ml-2 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            
+            {/* SETTINGS ICON FOR MASTER */}
+            {(userRole === 'admin' || userRole === 'master') && (
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+            )}
           </div>
           
-          <div className="flex flex-wrap justify-center gap-2 items-center w-full md:w-auto">
+          <div className="flex gap-1 md:gap-2 items-center">
             {userRole && (
-              <div className="p-1 flex gap-1 rounded bg-gray-700 w-full md:w-auto justify-center">
+              <div className="p-0.5 md:p-1 flex gap-0.5 md:gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`flex-1 md:flex-none px-3 py-1.5 text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[9px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-1.5 text-xs border border-black hover:bg-red-700 transition-colors w-full md:w-auto">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[9px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1361,11 +1391,13 @@ export default function App() {
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {}))
+                    // SORT GROUPS BY CHALLAN NO DESCENDING
                     .sort((a, b) => b.keyValue.localeCompare(a.keyValue)) 
                     .map((group, idx) => {
                       
-                      // ALPHABETICAL SORT
+                      // SORT ITEMS INSIDE THE GROUP ALPHABETICALLY
                       const sortedItems = [...group.items].sort((a,b) => (a.item_desc || '').localeCompare(b.item_desc || ''));
+                      
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
                       const hiddenCount = sortedItems.length - 3;
@@ -1466,7 +1498,15 @@ export default function App() {
                         {userRole === 'master' && (
                           <td className="p-2 md:p-3 text-center vertical-middle select-none border-l border-gray-300">
                             <div className="flex justify-center gap-2 md:gap-3">
-                               <button onClick={() => { triggerHaptic(20); setMasterEditModal({ keyField: group.keyField, keyValue: group.keyValue, newKeyValue: group.keyValue, items: group.items.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
+                               <button onClick={() => { 
+                                  triggerHaptic(20); 
+                                  setMasterEditModal({ 
+                                    keyField: group.keyField, 
+                                    keyValue: group.keyValue, 
+                                    newKeyValue: group.keyValue, 
+                                    items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })) 
+                                  }); 
+                               }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
                                <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
                             </div>
                           </td>
