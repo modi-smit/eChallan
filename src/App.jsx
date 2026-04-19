@@ -62,7 +62,7 @@ const blinkTitle = (msg) => {
 const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
 const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 
-// --- NEW: M-DATE OFFLINE SEQUENCE GENERATOR ---
+// --- M-DATE OFFLINE SEQUENCE GENERATOR ---
 const getOfflineSequence = (prefix) => {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -70,6 +70,7 @@ const getOfflineSequence = (prefix) => {
   const yy = String(now.getFullYear()).slice(-2);
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
+  if (prefix === 'M') return `M${dd}${mm}${yy}${hh}${min}`;
   return `${prefix}${dd}${mm}${yy}${hh}${min}`;
 };
 
@@ -142,6 +143,7 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
+  // --- ROBUST NOTIFICATION ENGINE (SERVICE WORKER FALLBACK) ---
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
@@ -445,9 +447,7 @@ export default function App() {
 
   const executeDelete = async (type) => {
     if(!isOnline) { triggerSystemAlert("Error", "Internet required to delete records.", "error"); return; }
-    setIsProcessing(true);
-    triggerHaptic([50, 50, 100]);
-    
+    setIsProcessing(true); triggerHaptic([50, 50, 100]);
     try {
         if (type === 'SOFT') {
           const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue);
@@ -458,52 +458,34 @@ export default function App() {
           if (error) throw error;
           triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success");
         }
-        setDeleteModal(null);
-        refreshAllData();
-    } catch(err) {
-        triggerSystemAlert("Failed", err.message, "error"); 
-    } finally {
-        setIsProcessing(false);
-    }
+        setDeleteModal(null); refreshAllData();
+    } catch(err) { triggerSystemAlert("Failed", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
-    setIsProcessing(true); 
-    triggerHaptic([40, 40, 100]);
-
+    setIsProcessing(true); triggerHaptic([40, 40, 100]);
     try {
         for (const item of masterEditModal.items) {
           const newQty = parseInt(item.edit_qty) || 0;
-          
           if (newQty <= 0) {
               await supabase.from('transactions').delete().eq('id', item.id);
           } else {
-              const updatePayload = { 
-                  item_desc: cleanDesc(item.item_desc),
-                  unit: getUnit(item.item_desc) 
-              };
+              const updatePayload = { item_desc: cleanDesc(item.item_desc), unit: getUnit(item.item_desc) };
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
-              
               await supabase.from('transactions').update(updatePayload).eq('id', item.id);
           }
         }
         setMasterEditModal(null);
         triggerSystemAlert("Record Updated", `Successfully modified items.`, "success");
         refreshAllData();
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error"); 
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   const saveSettings = (e) => {
-      e.preventDefault();
-      localStorage.setItem('god_emg_url', emergencyUrl);
-      setSettingsModal(false);
-      triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success");
+      e.preventDefault(); localStorage.setItem('god_emg_url', emergencyUrl);
+      setSettingsModal(false); triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success");
   };
 
   const formatDate = (dateInput) => {
@@ -574,6 +556,118 @@ export default function App() {
         return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
     }
     return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
+  };
+  // ==========================
+  // --- EXCEL EXPORT ENGINE ---
+  // ==========================
+  const downloadLedger = () => {
+    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
+    const dispatchedDataObj = {}; const returnsDataObj = {};
+    ledgerData.forEach(row => {
+      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
+      if (row.status === 'RETURN_ACCEPTED') {
+         if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
+         returnsDataObj['RETURNS'].items.push(row);
+      } else {
+         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
+         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
+         dispatchedDataObj[key].items.push(row);
+      }
+    });
+
+    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
+    const returnGroups = Object.values(returnsDataObj);
+    const itemSummary = {};
+    
+    ledgerData.forEach(row => {
+      const desc = cleanDesc(row.item_desc); const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
+      if (row.status !== 'DELETED') {
+        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
+        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      }
+    });
+
+    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
+    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
+    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
+
+    let htmlArray = [];
+    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
+    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
+
+    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
+        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
+        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
+        if (isNum) st += `mso-number-format:'\\@';`;
+        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
+    };
+
+    let leftRows = [], rightRows = [];
+    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
+    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
+    leftRows.push(
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
+        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
+    );
+
+    let gTotal = 0;
+    dispatchedGroups.forEach(g => {
+        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
+        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
+        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
+        g.items.forEach((r, i) => {
+            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
+            if (g.status !== 'DELETED') gTotal += rq;
+            let rowHtml = "";
+            if (i === 0) {
+                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
+                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
+            }
+            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc))).toUpperCase());
+            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, String(g.admin_note || ''), g.items.length);
+            leftRows.push(rowHtml);
+        });
+    });
+    leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
+
+    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
+    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
+    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
+    
+    if (servoEntries.length > 0) {
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
+        let sTot = 0;
+        servoEntries.forEach(([d, v]) => { sTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
+    }
+    if (tvsEntries.length > 0) {
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
+        let tTot = 0;
+        tvsEntries.forEach(([d, v]) => { tTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
+    }
+
+    const maxRows = Math.max(leftRows.length, rightRows.length);
+    for(let i=0; i<maxRows; i++) {
+        htmlArray.push(`<tr style="height:35px;">`);
+        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
+        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
+        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
+        htmlArray.push(`</tr>`);
+    }
+    htmlArray.push(`</table></body></html>`);
+
+    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
   const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
@@ -673,9 +767,9 @@ export default function App() {
     let y = 53; const maxY = 165; 
 
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc || ''; const splitDesc = doc.splitTextToSize(desc, 85); 
+      const desc = String(item.description || item.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
-      const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
       if (y + rowHeight > maxY) {
@@ -710,142 +804,6 @@ export default function App() {
         doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
     }
     doc.save(`${challanNo}.pdf`);
-  };
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...');
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = new Uint8Array(e.target.result); const workbook = XLSX.read(data, { type: 'array' }); let finalItemsToUpload = [];
-        const normalizeRow = (row) => { const normalized = {}; for (let key in row) normalized[key.toLowerCase().trim()] = row[key]; return normalized; };
-        ['SERVO', 'TVS'].forEach(sheetName => {
-          const sheet = workbook.SheetNames.find(s => s.toUpperCase() === sheetName);
-          if (sheet) {
-            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
-              const norm = normalizeRow(row); 
-              return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null };
-            }).filter(item => item.description);
-            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
-          }
-        });
-        await supabase.from('master_items').delete().neq('description', 'dummy'); 
-        await supabase.from('master_items').insert(finalItemsToUpload);
-        refreshAllData();
-      } catch (error) { setUploadStatus(`Error`); }
-    };
-    reader.readAsArrayBuffer(file); 
-  };
-
-  // --- TOKEN-SAFE HIGH COMPRESSION EXCEL EXPORT ---
-  const downloadLedger = () => {
-    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
-    const dispatchedDataObj = {}; const returnsDataObj = {};
-    ledgerData.forEach(row => {
-      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
-      if (row.status === 'RETURN_ACCEPTED') {
-         if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
-         returnsDataObj['RETURNS'].items.push(row);
-      } else {
-         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
-         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
-         dispatchedDataObj[key].items.push(row);
-      }
-    });
-
-    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
-    const returnGroups = Object.values(returnsDataObj);
-    const itemSummary = {};
-    
-    ledgerData.forEach(row => {
-      const desc = cleanDesc(row.item_desc); const q = parseInt(row.disp_qty || row.req_qty) || 0;
-      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
-      if (row.status !== 'DELETED') {
-        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
-        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
-      }
-    });
-
-    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
-    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
-    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
-
-    let htmlArray = [];
-    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
-    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
-
-    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
-        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
-        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
-        if (isNum) st += `mso-number-format:'\\@';`;
-        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
-    };
-
-    let leftRows = [], rightRows = [];
-    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
-    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
-    leftRows.push(
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
-        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
-    );
-
-    let gTotal = 0;
-    dispatchedGroups.forEach(g => {
-        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
-        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
-        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
-        g.items.forEach((r, i) => {
-            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
-            if (g.status !== 'DELETED') gTotal += rq;
-            let rowHtml = "";
-            if (i === 0) {
-                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
-                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
-            }
-            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
-            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
-            rowHtml += cell(bg, tc, 'center', false, 'bold', false, getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc)).toUpperCase());
-            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, g.admin_note || '', g.items.length);
-            leftRows.push(rowHtml);
-        });
-    });
-    leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
-
-    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
-    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
-    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
-    
-    if (servoEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
-        let sTot = 0;
-        servoEntries.forEach(([d, v]) => { sTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, getDisplayQty(d, v.qty, v.unit).toUpperCase())); });
-        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
-    }
-    if (tvsEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
-        let tTot = 0;
-        tvsEntries.forEach(([d, v]) => { tTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, getDisplayQty(d, v.qty, v.unit).toUpperCase())); });
-        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
-    }
-
-    const maxRows = Math.max(leftRows.length, rightRows.length);
-    for(let i=0; i<maxRows; i++) {
-        htmlArray.push(`<tr style="height:35px;">`);
-        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
-        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
-        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
-        htmlArray.push(`</tr>`);
-    }
-    htmlArray.push(`</table></body></html>`);
-
-    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
   const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix, focusRef, currentSelectedItem) => {
@@ -884,9 +842,14 @@ export default function App() {
   const addToRetailCart = (e) => {
     if (e) e.preventDefault();
     if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
+    
     triggerHaptic(40);
     let finalQty = parseInt(retailQty);
-    if (finalQty < 0) { setRetailMode('RETURN'); finalQty = Math.abs(finalQty); }
+    if (finalQty < 0) {
+        setRetailMode('RETURN');
+        finalQty = Math.abs(finalQty);
+    }
+
     setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
     setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
@@ -899,7 +862,10 @@ export default function App() {
   const submitRetailAction = async (e) => {
     if (e) e.preventDefault();
     if (retailCart.length === 0 || isProcessing) return; 
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
         const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
         const tx = retailCart.map(item => ({ 
@@ -907,8 +873,15 @@ export default function App() {
           unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
           challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
         }));
-        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => { setRetailCart([]); setRetailReturnNote(''); });
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        
+        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
+          setRetailCart([]); setRetailReturnNote('');
+        });
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
@@ -916,9 +889,14 @@ export default function App() {
   const addToDepotCart = (e) => {
     if (e) e.preventDefault();
     if (!selectedItem || !qty || parseInt(qty) === 0) return;
+    
     triggerHaptic(40);
     let finalQty = parseInt(qty);
-    if (finalQty < 0) { setDepotMode('RETURN_REQUEST'); finalQty = Math.abs(finalQty); }
+    if (finalQty < 0) {
+        setDepotMode('RETURN_REQUEST');
+        finalQty = Math.abs(finalQty);
+    }
+
     setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
     setSearchQuery(''); setQty(''); setSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
@@ -931,21 +909,32 @@ export default function App() {
   const submitDepotAction = async (e) => {
     e.preventDefault(); 
     if (depotCart.length === 0 || isProcessing) return;
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+
     try {
         if (depotMode === 'DISPATCH') {
           const challanNo = await getNextSequence('CN'); const groupId = getOfflineSequence('M');
           const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => { printPDF(challanNo, depotCart); setDepotCart([]); });
+          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
+            printPDF(challanNo, depotCart); setDepotCart([]); 
+          });
         } else {
           const groupId = await getNextSequence('RR');
           const tx = depotCart.map(item => ({ 
             group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
             unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
           }));
-          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => { setDepotCart([]); setDepotReturnNote(''); });
+          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
+            setDepotCart([]); setDepotReturnNote('');
+          });
         }
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   // --- SAFE VERIFICATION LOGIC ---
@@ -953,7 +942,12 @@ export default function App() {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
-    setVerifyModal({ challanNo, items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), checks, isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false });
+    setVerifyModal({ 
+      challanNo, 
+      items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
+      checks, 
+      isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
+    });
   };
 
   const toggleVerifyCheck = (index) => {
@@ -965,24 +959,35 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
+    // USE .some() TO PREVENT LOCKUP
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
-        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning"); return;
+        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
+        return;
     }
 
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
     
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
+        
+        // SEQUENTIAL AWAIT
         for (let i = 0; i < checkedIndexes.length; i++) {
             const index = checkedIndexes[i];
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
             await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         }
-        setVerifyModal(null); refreshAllData();
+
+        setVerifyModal(null); 
+        refreshAllData();
         triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
-    } catch (err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+    } catch (err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   // --- SAFE DISPATCH PO LOGIC ---
@@ -991,31 +996,56 @@ export default function App() {
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
+  
+  const handleEditPOQty = (index, val) => { 
+      const updated = [...editPOModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setEditPOModal({ ...editPOModal, items: updated }); 
+  };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!editPOModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
         const challanNo = await getNextSequence('CN'); 
-        const backorders = []; const printItems = []; let newPO = null;
+        const backorders = []; 
+        const printItems = [];
+        let newPO = null;
 
+        // SEQUENTIAL AWAIT 
         for (const item of editPOModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
-          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
+
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').delete().eq('id', item.id); 
+              continue; 
+          }
+          
           await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
+          
           if (dispatchQty < reqQty) { 
               if (!newPO) newPO = await getNextSequence('PO');
               backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
           }
         }
+
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        setEditPOModal(null); refreshAllData(); triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        
+        setEditPOModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const openProcessReturnModal = (groupId, items) => { 
@@ -1023,31 +1053,55 @@ export default function App() {
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
+  
+  const handleProcessReturnQty = (index, val) => { 
+      const updated = [...processReturnModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setProcessReturnModal({ ...processReturnModal, items: updated }); 
+  };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!processReturnModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
         const challanNo = await getNextSequence('RT'); 
-        const backorders = []; const printItems = []; let newRR = null;
+        const backorders = []; 
+        const printItems = [];
+        let newRR = null;
 
         for (const item of processReturnModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
-          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
+
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').delete().eq('id', item.id); 
+              continue; 
+          }
+
           await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
+          
           if (dispatchQty < reqQty) { 
               if (!newRR) newRR = await getNextSequence('RR');
               backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); 
           }
         }
+
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        setProcessReturnModal(null); refreshAllData(); triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        
+        setProcessReturnModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   // --- CLEAN INITIALIZATION SCREEN ---
@@ -1080,7 +1134,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       
-      {/* --- IN-APP TOAST CONTAINER --- */}
+      {/* TOASTS */}
       <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black font-bold uppercase text-sm animate-slide-in flex items-center gap-3 w-72 bg-white text-black`}>
@@ -1094,7 +1148,7 @@ export default function App() {
       </div>
       <style dangerouslySetInnerHTML={{__html: `@keyframes slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }`}} />
 
-      {/* --- SETTINGS MODAL --- */}
+      {/* SETTINGS MODAL */}
       {settingsModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[70]">
             <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1109,7 +1163,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MASTER DELETE MODAL --- */}
+      {/* MASTER DELETE MODAL */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1118,7 +1172,7 @@ export default function App() {
                 <div className="flex flex-col gap-3">
                     <button onClick={() => executeDelete('SOFT')} disabled={isProcessing} className="w-full bg-gray-200 border-2 border-black p-3 text-left hover:bg-gray-300 transition-colors disabled:opacity-50">
                         <span className="block text-black font-black text-sm">1. VOID (Soft Delete)</span>
-                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the Challan/PO number in the ledger for auditing transparency.</span>
+                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the sequence number in the ledger for auditing transparency.</span>
                     </button>
                     <button onClick={() => executeDelete('HARD')} disabled={isProcessing} className="w-full bg-red-100 border-2 border-red-900 p-3 text-left hover:bg-red-200 transition-colors disabled:opacity-50">
                         <span className="block text-red-900 font-black text-sm">2. WIPE COMPLETELY (Hard Delete)</span>
@@ -1130,7 +1184,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MASTER EDIT MODAL --- */}
+      {/* MASTER EDIT MODAL */}
       {masterEditModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1151,9 +1205,7 @@ export default function App() {
                     }} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
-                <datalist id="masterItemsList">
-                    {masterItems.map((m, i) => <option key={i} value={m.description} />)}
-                </datalist>
+                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m.description} />)}</datalist>
               </div>
               <div className="flex space-x-2">
                 <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
@@ -1163,7 +1215,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- VERIFY MODAL --- */}
+      {/* VERIFY MODAL */}
       {verifyModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1175,18 +1227,10 @@ export default function App() {
                       <div className="w-8 flex justify-center">
                           <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600" />
                       </div>
-                      <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
-                      <input
-                          type="number"
-                          value={item.edit_qty}
-                          onClick={(e) => e.stopPropagation()} 
-                          onChange={(e) => {
-                              const updated = [...verifyModal.items];
-                              updated[idx] = { ...updated[idx], edit_qty: e.target.value };
-                              setVerifyModal({ ...verifyModal, items: updated });
-                          }}
-                          className="w-20 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none"
-                      />
+                      <span className="flex-1 text-[11px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                      <input type="number" value={item.edit_qty} onClick={(e) => e.stopPropagation()} onChange={(e) => {
+                              const updated = [...verifyModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setVerifyModal({ ...verifyModal, items: updated });
+                          }} className="w-16 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                     </label>
                   ))}
                 </div>
@@ -1198,7 +1242,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- EDIT PO MODAL --- */}
+      {/* EDIT PO MODAL */}
       {editPOModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1221,7 +1265,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- PROCESS RETURN MODAL --- */}
+      {/* PROCESS RETURN MODAL */}
       {processReturnModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -1244,43 +1288,42 @@ export default function App() {
         </div>
       )}
 
-      {/* --- CLASSIC SINGLE-LINE NAVIGATION BAR --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs md:text-sm">
-          
-          <div className="flex items-center gap-2">
-            <span className="tracking-widest truncate max-w-[100px] md:max-w-none">GOD</span>
+      {/* SINGLE LINE NAVIGATION BAR */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-2.5 md:p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex justify-between items-center w-full font-bold uppercase text-[10px] md:text-sm">
+          <div className="flex items-center gap-1 md:gap-2">
+            <span className="tracking-widest hidden sm:inline">Gujarat Oil Depot</span>
+            <span className="tracking-widest sm:hidden text-xs">GOD</span>
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
                 else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-            }} className="hover:scale-110 transition-transform text-base md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
             {actionableCount > 0 && (
               <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
               </span>
             )}
-            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[9px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
-            
+            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-base md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
           
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-row gap-1 md:gap-2 items-center">
             {userRole && (
-              <div className="p-1 flex gap-1 rounded bg-gray-700">
+              <div className="p-0.5 md:p-1 flex flex-row gap-0.5 md:gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[8px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
