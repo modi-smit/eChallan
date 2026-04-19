@@ -142,7 +142,6 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
-  // --- ROBUST NOTIFICATION ENGINE (SERVICE WORKER FALLBACK) ---
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
@@ -152,7 +151,6 @@ export default function App() {
       playChime();
       try {
         if ("Notification" in window && Notification.permission === "granted") {
-          // Send to Service Worker for Android background compliance
           if (navigator.serviceWorker) {
             navigator.serviceWorker.ready.then(reg => {
               reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
@@ -163,7 +161,7 @@ export default function App() {
             new Notification(title, { body: body, icon: '/pwa-512x512.png' });
           }
         }
-      } catch(e) { /* Safe fallback for strict mobile browsers */ }
+      } catch(e) { /* Safe fallback */ }
     }
   };
 
@@ -469,7 +467,6 @@ export default function App() {
     }
   };
 
-  // --- REBUILT MASTER EDIT (Targeted by ID, No Sequence Change, Sorted) ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -533,7 +530,7 @@ export default function App() {
       if (!isOnline) throw new Error("Offline");
       const { data, error } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
       if (error) throw error;
-      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(String(data[0][column]).replace(prefix, ''))) + 1).padStart(3, '0')}`;
+      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(String(data[0][column]).replace(prefix, '')) + 1).padStart(3, '0')}`;
       return `${prefix}001`;
     } catch (e) { return getOfflineSequence(prefix === 'PO' ? 'PO' : prefix === 'RT' ? 'RT' : prefix === 'RR' ? 'RR' : 'M'); }
   };
@@ -626,63 +623,38 @@ export default function App() {
     return results.slice(0, 50);
   };
 
-  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Grid & Fixed Pagination) ---
+  // --- REBUILT PRE-PRINTED PDF ENGINE ---
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
     const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
-    
     let totalNos = 0;
     
     const drawPageHeaders = () => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // Header Background
-        doc.setFillColor(235, 235, 235); 
-        doc.rect(5, 5, 138, 16, 'F'); 
-        doc.rect(5, 5, 138, 16, 'S'); 
-        
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); 
-        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
         
-        // Metadata
         doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // Table Header
-        doc.setFillColor(245, 245, 245); 
-        doc.rect(5, 41, 138, 7, 'F'); 
-        doc.rect(5, 41, 138, 7, 'S'); 
+        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
 
-        // Column Labels
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); 
-        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 115, 46, { align: "center" }); 
-        doc.text("QTY", 134, 46, { align: "center" });
+        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
     };
 
     const drawPageGrid = (endY) => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // Master Outer Borders (Left and Right to endY)
-        doc.line(5, 48, 5, endY); 
-        doc.line(143, 48, 143, endY); 
-        
-        // Vertical Grid Lines
-        doc.line(15, 48, 15, endY);   // SR
-        doc.line(105, 48, 105, endY); // Desc
-        doc.line(125, 48, 125, endY); // NOS
-        
-        // Bottom Closure Line
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
+        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
         doc.line(5, endY, 143, endY); 
     };
 
@@ -698,78 +670,45 @@ export default function App() {
     };
 
     drawPageHeaders();
-    let y = 53;
-    const maxY = 165; 
+    let y = 53; const maxY = 165; 
 
     itemsList.forEach((item, index) => {
-      const desc = item.description || item.item_desc || ''; 
-      const splitDesc = doc.splitTextToSize(desc, 85); 
+      const desc = item.description || item.item_desc || ''; const splitDesc = doc.splitTextToSize(desc, 85); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Page Break Engine
       if (y + rowHeight > maxY) {
           drawPageGrid(maxY);
           drawSignatures(maxY + 15);
-          
-          // Draw outer bounding box for signatures
-          doc.line(5, maxY, 5, maxY + 22);
-          doc.line(143, maxY, 143, maxY + 22);
-          doc.line(5, maxY + 22, 143, maxY + 22);
-
-          doc.addPage();
-          drawPageHeaders();
-          y = 53;
+          doc.line(5, maxY, 5, maxY + 22); doc.line(143, maxY, 143, maxY + 22); doc.line(5, maxY + 22, 143, maxY + 22);
+          doc.addPage(); drawPageHeaders(); y = 53;
       }
 
       doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
-      doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 115, y, { align: "center" }); 
-      doc.setFontSize(8); 
-      doc.text(displayStr, 134, y, { align: "center" });
+      doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); 
+      doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
       if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
         doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
-        doc.setDrawColor(0, 0, 0); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); 
       }
       y += rowHeight + 2; 
     });
 
-    // LAST PAGE CLOSURE
     drawPageGrid(y);
-
-    // TOTAL BOX
-    doc.setFillColor(235, 235, 235); 
-    doc.rect(5, y, 100, 7, 'F'); 
-    doc.rect(105, y, 38, 7, 'F'); 
-    doc.rect(5, y, 138, 7, 'S'); 
-    doc.line(105, y, 105, y + 7); 
-
-    doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
-    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
+    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
     
-    // SIGNATURES ON LAST PAGE
-    const sigY = y + 20;
-    drawSignatures(sigY);
+    const sigY = y + 20; drawSignatures(sigY);
+    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
 
-    // Close signature box
-    doc.line(5, y + 7, 5, sigY + 7);
-    doc.line(143, y + 7, 143, sigY + 7);
-    doc.line(5, sigY + 7, 143, sigY + 7);
-
-    // AUTOMATED PAGINATION
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
+        doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8);
         doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
     }
-
     doc.save(`${challanNo}.pdf`);
   };
 
@@ -798,12 +737,12 @@ export default function App() {
     reader.readAsArrayBuffer(file); 
   };
 
+  // --- TOKEN-SAFE HIGH COMPRESSION EXCEL EXPORT ---
   const downloadLedger = () => {
-    if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
+    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
     const dispatchedDataObj = {}; const returnsDataObj = {};
-    
     ledgerData.forEach(row => {
-      const key = row.challan_no || row.group_id;
+      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
       if (row.status === 'RETURN_ACCEPTED') {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
@@ -821,162 +760,90 @@ export default function App() {
     ledgerData.forEach(row => {
       const desc = cleanDesc(row.item_desc); const q = parseInt(row.disp_qty || row.req_qty) || 0;
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
-      
       if (row.status !== 'DELETED') {
         if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
         else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
       }
     });
 
-    const summaryEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
-    const servoEntries = summaryEntries.filter(([_, data]) => data.category === 'SERVO');
-    const tvsEntries = summaryEntries.filter(([_, data]) => data.category === 'TVS');
-    
-    const exportTitle = `GUJARAT OIL DEPOT - TRANSACTION LEDGER (${monthNames[ledgerMonth]} ${ledgerYear})`;
+    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
+    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
+    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
 
-    let leftRowsFlat = [];
-    leftRowsFlat.push({ type: 'title', title: exportTitle, bgColor: '#d1d5db' });
-    leftRowsFlat.push({ type: 'subtitle', title: `BILLED TO: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, bgColor: '#f3f4f6' });
-    leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'CHALLAN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'ADMIN NOTE'], bgColor: '#e5e7eb' });
+    let htmlArray = [];
+    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
+    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
 
-    let globalTxTotal = 0;
-    dispatchedGroups.forEach(group => {
-      let bgColor = group.status === "DELETED" ? "#f3f4f6" : group.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; 
-      let qtyColor = group.status === "DELETED" ? 'color: #9ca3af;' : 'color: #000;';
-      
-      let challanText = group.challan_no || '-';
-      if (group.status === 'DELETED') challanText += " (DELETED)";
+    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
+        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
+        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
+        if (isNum) st += `mso-number-format:'\\@';`;
+        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
+    };
 
-      group.items.forEach((row, i) => {
-        const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; 
-        if (group.status !== 'DELETED') globalTxTotal += rawQty; 
+    let leftRows = [], rightRows = [];
+    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
+    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
+    leftRows.push(
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
+        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
+    );
 
-        leftRowsFlat.push({
-          type: 'data', isReturn: false, isFirst: i === 0, rowspan: group.items.length,
-          date: `${formatDate(group.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(group.date)}`,
-          challan: challanText, desc: cleanDesc(row.item_desc), nos: String(rawQty).padStart(2, '0'),
-          qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-          adminNote: group.admin_note || '', color: bgColor, qtyColor: qtyColor 
+    let gTotal = 0;
+    dispatchedGroups.forEach(g => {
+        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
+        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
+        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
+        g.items.forEach((r, i) => {
+            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
+            if (g.status !== 'DELETED') gTotal += rq;
+            let rowHtml = "";
+            if (i === 0) {
+                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
+                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
+            }
+            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc)).toUpperCase());
+            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, g.admin_note || '', g.items.length);
+            leftRows.push(rowHtml);
         });
-      });
     });
-    if (dispatchedGroups.length > 0) leftRowsFlat.push({ type: 'global_total', color: '#d1d5db', total: String(globalTxTotal).padStart(2, '0') });
+    leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
 
-    if (returnGroups.length > 0) {
-      leftRowsFlat.push({ type: 'empty' });
-      leftRowsFlat.push({ type: 'title', title: `GUJARAT OIL DEPOT - RETURN LEDGER (${monthNames[ledgerMonth]} ${ledgerYear})`, bgColor: '#fca5a5' });
-      leftRowsFlat.push({ type: 'subtitle', title: `RETURNED BY: SOUTH GUJARAT DISTRIBUTORS, RETAIL STORE`, bgColor: '#fee2e2' });
-      leftRowsFlat.push({ type: 'header', cols: ['DATE / TIME', 'RETURN NO', 'ITEM DESCRIPTION', 'NOS', 'QTY', 'REMARKS / NOTE'], bgColor: '#fecaca' });
-
-      let globalReturnTotal = 0;
-      returnGroups.forEach(group => {
-        let bgColor = "#fef2f2"; 
-        group.items.forEach((row, i) => {
-          const rawQty = parseInt(row.disp_qty || row.req_qty) || 0; globalReturnTotal += rawQty;
-          leftRowsFlat.push({
-            type: 'data', isReturn: true, isFirst: i === 0, rowspan: group.items.length, 
-            date: `${formatDate(row.timestamp)}<br style="mso-data-placement:same-cell;"/>${formatTime(row.timestamp)}`,
-            challan: row.challan_no || '-', desc: cleanDesc(row.item_desc), nos: String(rawQty).padStart(2, '0'),
-            qty: getDisplayQty(row.item_desc, rawQty, row.unit || getUnit(row.item_desc)).toUpperCase(),
-            note: row.note || '', color: bgColor, qtyColor: 'color: #dc2626;' 
-          });
-        });
-      });
-      leftRowsFlat.push({ type: 'global_total', color: '#fca5a5', total: String(globalReturnTotal).padStart(2, '0') });
-    }
-
-    let rightRowsFlat = [];
-    rightRowsFlat.push({ type: 'title', title: `ITEM WISE SUMMARY`, bgColor: '#fde047' });
-    rightRowsFlat.push({ type: 'subtitle', title: `TOTAL SKUS: ${summaryEntries.length}`, bgColor: '#fef08a' });
-    rightRowsFlat.push({ type: 'header', cols: ['ITEM DESCRIPTION', 'TOTAL NOS', 'CONVERTED QTY'], bgColor: '#fef9c3' });
+    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
+    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
+    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
     
     if (servoEntries.length > 0) {
-        rightRowsFlat.push({ type: 'group_title', title: 'SERVO LUBRICANTS', bgColor: '#fde047' });
-        let servoTotal = 0;
-        servoEntries.forEach(([desc, data]) => { 
-            servoTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc: cleanDesc(data.rawItemDesc), nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
-        });
-        rightRowsFlat.push({ type: 'summary_total', total: String(servoTotal).padStart(2, '0'), color: '#fef08a' });
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
+        let sTot = 0;
+        servoEntries.forEach(([d, v]) => { sTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, getDisplayQty(d, v.qty, v.unit).toUpperCase())); });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
     }
     if (tvsEntries.length > 0) {
-        rightRowsFlat.push({ type: 'group_title', title: 'TVS TYRES & TUBES', bgColor: '#fde047' });
-        let tvsTotal = 0;
-        tvsEntries.forEach(([desc, data]) => { 
-            tvsTotal += data.qty;
-            rightRowsFlat.push({ type: 'summary_data', desc: cleanDesc(data.rawItemDesc), nos: String(data.qty).padStart(2, '0'), qty: getDisplayQty(desc, data.qty, data.unit).toUpperCase(), bgColor: '#fef9c3' }); 
-        });
-        rightRowsFlat.push({ type: 'summary_total', total: String(tvsTotal).padStart(2, '0'), color: '#fef08a' });
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
+        let tTot = 0;
+        tvsEntries.forEach(([d, v]) => { tTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, getDisplayQty(d, v.qty, v.unit).toUpperCase())); });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
     }
 
-    const maxRows = Math.max(leftRowsFlat.length, rightRowsFlat.length);
-    let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`;
-    html += `<table border="0" cellpadding="5" cellspacing="0" style="font-family: Arial, sans-serif; border-collapse: collapse; font-size: 13px; white-space: nowrap;">`;
-    html += `<colgroup><col width="130" /><col width="110" /><col width="380" /><col width="50" /><col width="130" /><col width="180" /><col width="30" /><col width="380" /><col width="80" /><col width="140" /></colgroup>`;
-
+    const maxRows = Math.max(leftRows.length, rightRows.length);
     for(let i=0; i<maxRows; i++) {
-      html += `<tr style="height: 35px;">`;
-      if (i < leftRowsFlat.length) {
-        const l = leftRowsFlat[i]; const spanLimit = 6;
-        if (l.type === 'title') { 
-            html += `<td colspan="${spanLimit}" style="background-color: ${l.bgColor}; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-        } else if (l.type === 'subtitle') { 
-            html += `<td colspan="${spanLimit}" style="background-color: ${l.bgColor}; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${l.title}</td>`;
-        } else if (l.type === 'header') { 
-            l.cols.forEach((col, idx) => { 
-                const align = (idx === 2) ? 'left' : 'center'; 
-                html += `<td style="background-color: ${l.bgColor}; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`; 
-            });
-        } else if (l.type === 'data') {
-            if (l.isFirst) {
-                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes;">${l.date}</td>`;
-                html += `<td rowspan="${l.rowspan}" style="mso-number-format:'\\@'; background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.challan}</td>`;
-            }
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.desc}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; ${l.qtyColor} white-space: nowrap;">${l.nos}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; ${l.qtyColor} white-space: nowrap;">${l.qty}</td>`;
-            if (l.isReturn) { 
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.note || ''}</td>`;
-            } else { 
-                if (l.isFirst) html += `<td rowspan="${l.rowspan}" style="background-color: ${l.color}; border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; width: 180px; max-width: 180px; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${l.adminNote || ''}</td>`; 
-            }
-        } else if (l.type === 'global_total') {
-            html += `<td colspan="3" style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">GRAND TOTAL:</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${l.total}</td>`;
-            html += `<td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td><td style="background-color: ${l.color}; border: 1px solid black; padding: 8px;"></td>`;
-        } else if (l.type === 'empty') { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6); }
-      } else { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(6); }
-
-      html += `<td style="border: none; background-color: transparent; width: 30px;"></td>`;
-
-      if (i < rightRowsFlat.length) {
-        const r = rightRowsFlat[i];
-        if (r.type === 'title') { 
-            html += `<td colspan="3" style="background-color: ${r.bgColor}; color: #000; padding: 10px; text-align: left; border: 1px solid black; font-size: 16px; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
-        } else if (r.type === 'subtitle') { 
-            html += `<td colspan="3" style="background-color: ${r.bgColor}; color: #000; padding: 8px; text-align: left; border: 1px solid black; font-weight: bold; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
-        } else if (r.type === 'header') { 
-            r.cols.forEach((col, idx) => { 
-                const align = (idx === 0) ? 'left' : 'center'; 
-                html += `<td style="background-color: ${r.bgColor}; border: 1px solid black; padding: 8px; font-weight: bold; text-align: ${align}; color: #000; vertical-align: middle; white-space: nowrap;">${col}</td>`; 
-            });
-        } else if (r.type === 'group_title') { 
-            html += `<td colspan="3" style="background-color: ${r.bgColor}; color: #1e3a8a; padding: 8px; text-align: center; border: 1px solid black; font-weight: bold; font-size: 14px; vertical-align: middle; white-space: nowrap;">${r.title}</td>`;
-        } else if (r.type === 'summary_data') {
-            html += `<td style="border: 1px solid black; vertical-align: middle; padding: 8px; color: #000; background-color: ${r.bgColor}; white-space: normal; mso-style-textwrap: yes; word-wrap: break-word;">${r.desc}</td>`;
-            html += `<td style="border: 1px solid black; vertical-align: middle; text-align: center; font-weight: bold; padding: 8px; color: #000; background-color: ${r.bgColor}; white-space: nowrap;">${r.nos}</td>`;
-            html += `<td style="border: 1px solid black; vertical-align: middle; font-weight: bold; padding: 8px; text-align: center; color: #000; background-color: ${r.bgColor}; white-space: nowrap;">${r.qty}</td>`;
-        } else if (r.type === 'summary_total') {
-            html += `<td style="background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: right; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">GROUP TOTAL:</td>`;
-            html += `<td style="background-color: ${r.color}; border: 1px solid black; padding: 8px; text-align: center; font-weight: bold; color: #000; vertical-align: middle; white-space: nowrap;">${r.total}</td>`;
-            html += `<td style="background-color: ${r.color}; border: 1px solid black; padding: 8px;"></td>`;
-        }
-      } else { html += `<td style="border: none; background-color: transparent;"></td>`.repeat(3); }
-      html += `</tr>`;
+        htmlArray.push(`<tr style="height:35px;">`);
+        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
+        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
+        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
+        htmlArray.push(`</tr>`);
     }
-    html += `</table></body></html>`;
+    htmlArray.push(`</table></body></html>`);
 
-    const blob = new Blob([html], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob);
+    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
@@ -1017,14 +884,9 @@ export default function App() {
   const addToRetailCart = (e) => {
     if (e) e.preventDefault();
     if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
-    
     triggerHaptic(40);
     let finalQty = parseInt(retailQty);
-    if (finalQty < 0) {
-        setRetailMode('RETURN');
-        finalQty = Math.abs(finalQty);
-    }
-
+    if (finalQty < 0) { setRetailMode('RETURN'); finalQty = Math.abs(finalQty); }
     setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
     setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
@@ -1037,10 +899,7 @@ export default function App() {
   const submitRetailAction = async (e) => {
     if (e) e.preventDefault();
     if (retailCart.length === 0 || isProcessing) return; 
-    
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
         const tx = retailCart.map(item => ({ 
@@ -1048,15 +907,8 @@ export default function App() {
           unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
           challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
         }));
-        
-        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
-          setRetailCart([]); setRetailReturnNote('');
-        });
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => { setRetailCart([]); setRetailReturnNote(''); });
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   const depotFilteredItems = smartSearch(searchQuery);
@@ -1064,14 +916,9 @@ export default function App() {
   const addToDepotCart = (e) => {
     if (e) e.preventDefault();
     if (!selectedItem || !qty || parseInt(qty) === 0) return;
-    
     triggerHaptic(40);
     let finalQty = parseInt(qty);
-    if (finalQty < 0) {
-        setDepotMode('RETURN_REQUEST');
-        finalQty = Math.abs(finalQty);
-    }
-
+    if (finalQty < 0) { setDepotMode('RETURN_REQUEST'); finalQty = Math.abs(finalQty); }
     setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
     setSearchQuery(''); setQty(''); setSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
@@ -1084,33 +931,21 @@ export default function App() {
   const submitDepotAction = async (e) => {
     e.preventDefault(); 
     if (depotCart.length === 0 || isProcessing) return;
-    
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         if (depotMode === 'DISPATCH') {
-          const challanNo = await getNextSequence('CN'); 
-          const groupId = getOfflineSequence('M');
+          const challanNo = await getNextSequence('CN'); const groupId = getOfflineSequence('M');
           const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
-            printPDF(challanNo, depotCart); setDepotCart([]); 
-          });
+          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => { printPDF(challanNo, depotCart); setDepotCart([]); });
         } else {
           const groupId = await getNextSequence('RR');
           const tx = depotCart.map(item => ({ 
             group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
             unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
           }));
-          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
-            setDepotCart([]); setDepotReturnNote('');
-          });
+          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => { setDepotCart([]); setDepotReturnNote(''); });
         }
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   // --- SAFE VERIFICATION LOGIC ---
@@ -1118,12 +953,7 @@ export default function App() {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
-    setVerifyModal({ 
-      challanNo, 
-      items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
-      checks, 
-      isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
-    });
+    setVerifyModal({ challanNo, items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), checks, isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false });
   };
 
   const toggleVerifyCheck = (index) => {
@@ -1135,35 +965,24 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // USE .some() TO PREVENT LOCKUP
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
-        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
-        return;
+        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning"); return;
     }
 
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
-        
-        // SEQUENTIAL AWAIT (Prevents Supabase rate limiting freeze)
         for (let i = 0; i < checkedIndexes.length; i++) {
             const index = checkedIndexes[i];
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
             await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         }
-
-        setVerifyModal(null); 
-        refreshAllData();
+        setVerifyModal(null); refreshAllData();
         triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
-    } catch (err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch (err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   // --- SAFE DISPATCH PO LOGIC ---
@@ -1172,56 +991,31 @@ export default function App() {
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  
-  const handleEditPOQty = (index, val) => { 
-      const updated = [...editPOModal.items]; 
-      updated[index] = { ...updated[index], edit_qty: val }; 
-      setEditPOModal({ ...editPOModal, items: updated }); 
-  };
+  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!editPOModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         const challanNo = await getNextSequence('CN'); 
-        const backorders = []; 
-        const printItems = [];
-        let newPO = null;
+        const backorders = []; const printItems = []; let newPO = null;
 
-        // SEQUENTIAL AWAIT 
         for (const item of editPOModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; 
-          const reqQty = parseInt(item.req_qty) || 0;
-
-          if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
-              continue; 
-          }
-          
+          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
+          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
           await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
-          
           if (dispatchQty < reqQty) { 
               if (!newPO) newPO = await getNextSequence('PO');
               backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
           }
         }
-
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        
-        setEditPOModal(null); 
-        refreshAllData();
-        triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        setEditPOModal(null); refreshAllData(); triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
   const openProcessReturnModal = (groupId, items) => { 
@@ -1229,58 +1023,34 @@ export default function App() {
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  
-  const handleProcessReturnQty = (index, val) => { 
-      const updated = [...processReturnModal.items]; 
-      updated[index] = { ...updated[index], edit_qty: val }; 
-      setProcessReturnModal({ ...processReturnModal, items: updated }); 
-  };
+  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!processReturnModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         const challanNo = await getNextSequence('RT'); 
-        const backorders = []; 
-        const printItems = [];
-        let newRR = null;
+        const backorders = []; const printItems = []; let newRR = null;
 
         for (const item of processReturnModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; 
-          const reqQty = parseInt(item.req_qty) || 0;
-
-          if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
-              continue; 
-          }
-
+          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
+          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
           await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
-          
           if (dispatchQty < reqQty) { 
               if (!newRR) newRR = await getNextSequence('RR');
               backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); 
           }
         }
-
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        
-        setProcessReturnModal(null); 
-        refreshAllData();
-        triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        setProcessReturnModal(null); refreshAllData(); triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  // --- CLEAN, FAST INITIALIZATION SCREEN ---
+  // --- CLEAN INITIALIZATION SCREEN ---
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
@@ -1322,10 +1092,7 @@ export default function App() {
           </div>
         ))}
       </div>
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-      `}} />
+      <style dangerouslySetInnerHTML={{__html: `@keyframes slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }`}} />
 
       {/* --- SETTINGS MODAL --- */}
       {settingsModal && (
@@ -1348,18 +1115,15 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                 <h2 className="text-lg font-black border-b-2 border-black pb-2 mb-4 uppercase text-red-800">DELETE RECORD: {deleteModal.keyValue}</h2>
                 <p className="text-[13px] md:text-sm font-bold text-gray-700 mb-6">How would you like to remove this record?</p>
-                
                 <div className="flex flex-col gap-3">
                     <button onClick={() => executeDelete('SOFT')} disabled={isProcessing} className="w-full bg-gray-200 border-2 border-black p-3 text-left hover:bg-gray-300 transition-colors disabled:opacity-50">
                         <span className="block text-black font-black text-sm">1. VOID (Soft Delete)</span>
                         <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the Challan/PO number in the ledger for auditing transparency.</span>
                     </button>
-                    
                     <button onClick={() => executeDelete('HARD')} disabled={isProcessing} className="w-full bg-red-100 border-2 border-red-900 p-3 text-left hover:bg-red-200 transition-colors disabled:opacity-50">
                         <span className="block text-red-900 font-black text-sm">2. WIPE COMPLETELY (Hard Delete)</span>
                         <span className="block text-[11px] md:text-xs font-bold text-red-700 mt-1 uppercase">Erases all history permanently. Frees up the number to be reused.</span>
                     </button>
-                    
                     <button onClick={() => { triggerHaptic(30); setDeleteModal(null); }} disabled={isProcessing} className="w-full bg-black text-white border-2 border-black p-3 text-[13px] md:text-sm font-bold mt-2 hover:bg-gray-800 text-center transition-colors">CANCEL</button>
                 </div>
             </div>
@@ -1371,7 +1135,6 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
-
               <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
