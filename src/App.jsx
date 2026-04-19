@@ -31,7 +31,7 @@ const playChime = () => {
     gainNode.connect(globalAudioCtx.destination);
     osc.start();
     osc.stop(globalAudioCtx.currentTime + 0.5);
-  } catch (e) { console.warn("Audio API failed"); }
+  } catch (e) { /* silent fail for mobile compatibility */ }
 };
 
 const triggerHaptic = (pattern = 40) => {
@@ -58,11 +58,19 @@ const blinkTitle = (msg) => {
   }, { once: true });
 };
 
-// --- HYPER-STRICT DATA CLEANERS ---
-const cleanDesc = (d) => String(d).replace(/\s+/g, ' ').trim().toUpperCase();
-const normalizeString = (str) => {
-    if (!str) return '';
-    return String(str).toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+// --- HYPER-STRICT SAFE DATA CLEANERS ---
+const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
+const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+
+// --- NEW: M-DATE OFFLINE SEQUENCE GENERATOR ---
+const getOfflineSequence = (prefix) => {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yy = String(now.getFullYear()).slice(-2);
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `${prefix}${dd}${mm}${yy}${hh}${min}`;
 };
 
 export default function App() {
@@ -122,7 +130,6 @@ export default function App() {
   const [pendingReturns, setPendingReturns] = useState({});
   const [pendingDepotReturns, setPendingDepotReturns] = useState({});
 
-  // THE RESTORED MODALS STATE
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
@@ -135,6 +142,7 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
+  // --- ROBUST NOTIFICATION ENGINE (SERVICE WORKER FALLBACK) ---
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
@@ -142,9 +150,20 @@ export default function App() {
 
     if (document.visibilityState !== 'visible') {
       playChime();
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(title, { body: body, icon: '/pwa-512x512.png' });
-      }
+      try {
+        if ("Notification" in window && Notification.permission === "granted") {
+          // Send to Service Worker for Android background compliance
+          if (navigator.serviceWorker) {
+            navigator.serviceWorker.ready.then(reg => {
+              reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+            }).catch(() => {
+              new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+            });
+          } else {
+            new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+          }
+        }
+      } catch(e) { /* Safe fallback for strict mobile browsers */ }
     }
   };
 
@@ -155,11 +174,11 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // WATCHDOG TIMER
+  // WATCHDOG TIMER TO PREVENT BLACK SCREEN FREEZES
   useEffect(() => {
     const timer = setTimeout(() => {
        if(loadingAuth) setLoadingAuth(false);
-    }, 4000);
+    }, 3500);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -186,16 +205,18 @@ export default function App() {
   useEffect(() => {
     if (isOnline && session) {
       const fetchMonths = async () => {
-        const startDate = new Date(ledgerYear, 0, 1).toISOString();
-        const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
-        const { data } = await supabase.from('transactions').select('timestamp').gte('timestamp', startDate).lte('timestamp', endDate);
-        if (data && data.length > 0) {
-            const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
-            setAvailableMonths(months);
-            if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
-        } else {
-            setAvailableMonths([new Date().getMonth()]);
-        }
+        try {
+            const startDate = new Date(ledgerYear, 0, 1).toISOString();
+            const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
+            const { data } = await supabase.from('transactions').select('timestamp').gte('timestamp', startDate).lte('timestamp', endDate);
+            if (data && data.length > 0) {
+                const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
+                setAvailableMonths(months);
+                if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
+            } else {
+                setAvailableMonths([new Date().getMonth()]);
+            }
+        } catch(e) { /* fail silently */ }
       };
       fetchMonths();
     }
@@ -242,7 +263,7 @@ export default function App() {
       const { data, error } = await supabase.from('users').select('role').eq('id', userId).single();
       if (error) throw error;
       if (data) {
-        const currentRole = data.role ? data.role.toLowerCase().trim() : 'unassigned';
+        const currentRole = data.role ? String(data.role).toLowerCase().trim() : 'unassigned';
         setUserRole(currentRole);
         fetchAvailableYears();
 
@@ -267,23 +288,26 @@ export default function App() {
     
     if (data?.user) {
       await fetchRole(data.user.id);
-      if (window.OneSignalDeferred) {
-        window.OneSignalDeferred.push(async function(OneSignal) {
-          await OneSignal.init({
-            appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
-            safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
-            notifyButton: { enable: true },
-          });
-          OneSignal.User.PushSubscription.optIn();
-          const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
-          if (roleData && roleData.role) {
-             OneSignal.User.addTag("role", roleData.role.toLowerCase().trim());
+      
+      try {
+          if (window.OneSignalDeferred) {
+            window.OneSignalDeferred.push(async function(OneSignal) {
+              await OneSignal.init({
+                appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
+                safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
+                notifyButton: { enable: true },
+              });
+              OneSignal.User.PushSubscription.optIn();
+              const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
+              if (roleData && roleData.role) {
+                 OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim());
+              }
+            });
           }
-        });
-      }
-      if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
-        Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
-      }
+          if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
+            Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
+          }
+      } catch(e) { /* Safe fallback */ }
     }
     setIsLoggingIn(false);
   }
@@ -322,25 +346,29 @@ export default function App() {
 
   const fetchPendingData = async () => {
     if(!isOnline) return;
-    const promises = [
-      supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true }),
-      supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false }),
-      supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true }),
-      supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true })
-    ];
-    const results = await Promise.all(promises);
-    if (results[0].data) setPendingPOs(results[0].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
-    if (results[1].data) setIncomingDeliveries(results[1].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-    if (results[2].data) setPendingDepotReturns(results[2].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
-    if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+    try {
+        const promises = [
+          supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true }),
+          supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false }),
+          supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true }),
+          supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true })
+        ];
+        const results = await Promise.all(promises);
+        if (results[0].data) setPendingPOs(results[0].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+        if (results[1].data) setIncomingDeliveries(results[1].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+        if (results[2].data) setPendingDepotReturns(results[2].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+        if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+    } catch(e) { /* silent fail */ }
   };
 
   const fetchLedgerData = async () => {
     if (!session || !isOnline) return;
-    const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
-    const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
-    const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
-    if (data) setLedgerData(data);
+    try {
+        const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
+        const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
+        const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
+        if (data) setLedgerData(data);
+    } catch(e) { /* silent fail */ }
   };
 
   const refreshAllData = async () => {
@@ -441,6 +469,7 @@ export default function App() {
     }
   };
 
+  // --- REBUILT MASTER EDIT (Targeted by ID, No Sequence Change, Sorted) ---
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
     setIsProcessing(true); 
@@ -459,6 +488,7 @@ export default function App() {
               };
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
+              
               await supabase.from('transactions').update(updatePayload).eq('id', item.id);
           }
         }
@@ -503,9 +533,9 @@ export default function App() {
       if (!isOnline) throw new Error("Offline");
       const { data, error } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
       if (error) throw error;
-      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(data[0][column].replace(prefix, '')) + 1).padStart(3, '0')}`;
+      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(String(data[0][column]).replace(prefix, ''))) + 1).padStart(3, '0')}`;
       return `${prefix}001`;
-    } catch (e) { return `${prefix}-OFF-${Math.floor(Date.now() / 1000)}`; }
+    } catch (e) { return getOfflineSequence(prefix === 'PO' ? 'PO' : prefix === 'RT' ? 'RT' : prefix === 'RR' ? 'RR' : 'M'); }
   };
 
   const getCategory = (desc) => {
@@ -535,7 +565,7 @@ export default function App() {
   const getDisplayQty = (desc, qty, rawUnit) => {
     if (!desc) return `0 NOS`;
     let unit = rawUnit;
-    if (!unit || unit.toUpperCase() === 'CANS') unit = 'NOS'; 
+    if (!unit || String(unit).toUpperCase() === 'CANS') unit = 'NOS'; 
     
     const normDesc = normalizeString(desc);
     const item = masterItems.find(i => normalizeString(i.description) === normDesc);
@@ -559,7 +589,7 @@ export default function App() {
     }
     setHighlightIndex(-1); if(setDropdownState) setDropdownState(false);
 
-    if (searchQueryStr && searchQueryStr.length >= 2) {
+    if (searchQueryStr && String(searchQueryStr).length >= 2) {
         const sq = normalizeString(searchQueryStr);
         if (sq !== normalizeString(item.description) && (!item.sku || sq !== normalizeString(item.sku))) {
             const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}');
@@ -578,7 +608,7 @@ export default function App() {
     const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}');
     const aliasedDesc = aliases[sq];
     
-    const terms = query.toUpperCase().split(' ').filter(Boolean); 
+    const terms = String(query).toUpperCase().split(' ').filter(Boolean); 
     let results = masterItems.filter(item => {
        if (aliasedDesc && normalizeString(item.description) === normalizeString(aliasedDesc)) return true;
        if (item.sku && normalizeString(item.sku) === sq) return true;
@@ -604,17 +634,14 @@ export default function App() {
     
     let totalNos = 0;
     
-    const drawPageTemplate = () => {
+    const drawPageHeaders = () => {
         doc.setDrawColor(0, 0, 0);
         doc.setLineWidth(0.4);
         
-        // 1. MASTER OUTER BORDER (148x210mm A5 Page)
-        doc.rect(5, 5, 138, 195); 
-
-        // 2. HEADER
+        // Header Background
         doc.setFillColor(235, 235, 235); 
         doc.rect(5, 5, 138, 16, 'F'); 
-        doc.rect(5, 5, 138, 16); // Redraw border over fill
+        doc.rect(5, 5, 138, 16, 'S'); 
         
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
@@ -622,37 +649,44 @@ export default function App() {
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         
-        // 3. METADATA
+        // Metadata
         doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // 4. TABLE HEADER
+        // Table Header
         doc.setFillColor(245, 245, 245); 
         doc.rect(5, 41, 138, 7, 'F'); 
-        doc.rect(5, 41, 138, 7); // Redraw border over fill
-        
-        // 5. VERTICAL GRID LINES (Drawn explicitly to Y=182, which is bottom of total box)
-        const gridEndY = 182; 
-        doc.line(15, 41, 15, gridEndY);   // SR
-        doc.line(105, 41, 105, gridEndY); // Desc
-        doc.line(125, 41, 125, gridEndY); // NOS
-        
-        // 6. TOTAL ROW HORIZONTAL LINES
-        doc.line(5, 175, 143, 175); // Top of Total Row
-        doc.line(5, 182, 143, 182); // Bottom of Total Row
+        doc.rect(5, 41, 138, 7, 'S'); 
 
-        // 7. COLUMN LABELS
+        // Column Labels
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); 
         doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
         doc.text("NOS", 115, 46, { align: "center" }); 
         doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
+    };
 
-        // 8. SIGNATURE BLOCK (Always at fixed position)
-        const sigY = 191; 
+    const drawPageGrid = (endY) => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // Master Outer Borders (Left and Right to endY)
+        doc.line(5, 48, 5, endY); 
+        doc.line(143, 48, 143, endY); 
+        
+        // Vertical Grid Lines
+        doc.line(15, 48, 15, endY);   // SR
+        doc.line(105, 48, 105, endY); // Desc
+        doc.line(125, 48, 125, endY); // NOS
+        
+        // Bottom Closure Line
+        doc.line(5, endY, 143, endY); 
+    };
+
+    const drawSignatures = (sigY) => {
         doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
         if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
           doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
@@ -663,9 +697,9 @@ export default function App() {
         doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     };
 
-    drawPageTemplate();
+    drawPageHeaders();
     let y = 53;
-    const maxY = 172; 
+    const maxY = 165; 
 
     itemsList.forEach((item, index) => {
       const desc = item.description || item.item_desc || ''; 
@@ -674,10 +708,18 @@ export default function App() {
       const displayStr = getDisplayQty(desc, rawQty, item.unit || getUnit(desc)); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Page Break Calculation
+      // Page Break Engine
       if (y + rowHeight > maxY) {
+          drawPageGrid(maxY);
+          drawSignatures(maxY + 15);
+          
+          // Draw outer bounding box for signatures
+          doc.line(5, maxY, 5, maxY + 22);
+          doc.line(143, maxY, 143, maxY + 22);
+          doc.line(5, maxY + 22, 143, maxY + 22);
+
           doc.addPage();
-          drawPageTemplate();
+          drawPageHeaders();
           y = 53;
       }
 
@@ -688,34 +730,44 @@ export default function App() {
       doc.text(displayStr, 134, y, { align: "center" });
       doc.setFontSize(9); doc.setFont("helvetica", "normal");
       
-      // Subtle interior row divider
       if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
-        doc.setLineWidth(0.1); 
-        doc.setDrawColor(200, 200, 200); 
-        doc.line(5.5, y + rowHeight - 2, 142.5, y + rowHeight - 2); 
+        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
         doc.setDrawColor(0, 0, 0); 
       }
       y += rowHeight + 2; 
     });
 
-    // 9. FILL TOTAL BOX (Only populated on the very last page)
+    // LAST PAGE CLOSURE
+    drawPageGrid(y);
+
+    // TOTAL BOX
     doc.setFillColor(235, 235, 235); 
-    doc.rect(5, 175, 100, 7, 'F'); 
-    doc.rect(105, 175, 38, 7, 'F'); 
-    doc.rect(5, 175, 138, 7); // Redraw borders over fill
-    doc.line(105, 175, 105, 182); 
+    doc.rect(5, y, 100, 7, 'F'); 
+    doc.rect(105, y, 38, 7, 'F'); 
+    doc.rect(5, y, 138, 7, 'S'); 
+    doc.line(105, y, 105, y + 7); 
 
     doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 100, 180, { align: "right" }); 
-    doc.text(String(totalNos).padStart(2, '0'), 115, 180, { align: "center" });
+    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
     
-    // 10. AUTOMATED PAGINATION GENERATOR (Page X of Y)
+    // SIGNATURES ON LAST PAGE
+    const sigY = y + 20;
+    drawSignatures(sigY);
+
+    // Close signature box
+    doc.line(5, y + 7, 5, sigY + 7);
+    doc.line(143, y + 7, 143, sigY + 7);
+    doc.line(5, sigY + 7, 143, sigY + 7);
+
+    // AUTOMATED PAGINATION
     const totalPages = doc.internal.getNumberOfPages();
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 204, { align: "right" });
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
     }
 
     doc.save(`${challanNo}.pdf`);
@@ -1038,7 +1090,8 @@ export default function App() {
 
     try {
         if (depotMode === 'DISPATCH') {
-          const challanNo = await getNextSequence('CN'); const groupId = 'MANUAL-' + Date.now();
+          const challanNo = await getNextSequence('CN'); 
+          const groupId = getOfflineSequence('M');
           const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
           await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
             printPDF(challanNo, depotCart); setDepotCart([]); 
@@ -1060,12 +1113,11 @@ export default function App() {
     }
   };
 
-  // --- REBUILT VERIFICATION LOGIC ---
+  // --- SAFE VERIFICATION LOGIC ---
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
-    
     setVerifyModal({ 
       challanNo, 
       items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
@@ -1083,6 +1135,7 @@ export default function App() {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
+    // USE .some() TO PREVENT LOCKUP
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
     if (checkedIndexes.length === 0) {
         triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
@@ -1095,13 +1148,14 @@ export default function App() {
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
         
-        const promises = checkedIndexes.map(async (index) => {
+        // SEQUENTIAL AWAIT (Prevents Supabase rate limiting freeze)
+        for (let i = 0; i < checkedIndexes.length; i++) {
+            const index = checkedIndexes[i];
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
-            return supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
-        });
+            await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
+        }
 
-        await Promise.all(promises);
         setVerifyModal(null); 
         refreshAllData();
         triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
@@ -1112,7 +1166,7 @@ export default function App() {
     }
   };
 
-  // --- REBUILT DISPATCH PO LOGIC ---
+  // --- SAFE DISPATCH PO LOGIC ---
   const openEditPOModal = (groupId, items) => { 
       triggerHaptic(30);
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
@@ -1138,6 +1192,7 @@ export default function App() {
         const printItems = [];
         let newPO = null;
 
+        // SEQUENTIAL AWAIT 
         for (const item of editPOModal.items) {
           const dispatchQty = parseInt(item.edit_qty) || 0; 
           const reqQty = parseInt(item.req_qty) || 0;
@@ -1320,17 +1375,17 @@ export default function App() {
               <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
-                  <div key={idx} className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 bg-gray-100 border border-gray-300 p-2">
+                  <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
                         const updated = [...masterEditModal.items]; 
                         updated[idx] = { ...updated[idx], item_desc: e.target.value }; 
                         setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="flex-1 text-[13px] md:text-sm p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
+                    }} className="flex-1 min-w-0 text-[11px] md:text-[13px] p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
                     <input type="number" value={item.edit_qty} onChange={(e) => {
                         const updated = [...masterEditModal.items]; 
                         updated[idx] = { ...updated[idx], edit_qty: e.target.value }; 
                         setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="w-full md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    }} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
                 <datalist id="masterItemsList">
@@ -1386,12 +1441,12 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
               <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-gray-100 border border-gray-300 p-2">
-                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
+                    <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
@@ -1409,12 +1464,12 @@ export default function App() {
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
               <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
-                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 text-center">REQ</span><span className="w-24 text-center">DISPATCH</span></div>
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center space-x-2 md:space-x-3 bg-red-50 border border-red-300 p-2">
-                    <span className="flex-1 text-[13px] md:text-sm font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
-                    <span className="text-[13px] md:text-sm font-bold text-gray-600 w-20 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-20 md:w-24 text-[13px] md:text-sm p-1 md:p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                  <div key={idx} className="flex items-center gap-2 bg-red-50 border border-red-300 p-2">
+                    <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
+                    <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
@@ -1428,47 +1483,41 @@ export default function App() {
 
       {/* --- CLASSIC SINGLE-LINE NAVIGATION BAR --- */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex flex-row justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm">
+        <div className="container mx-auto flex justify-between items-center font-bold uppercase text-xs md:text-sm">
           
-          {/* Left Side Group */}
-          <div className="flex items-center gap-1 md:gap-2">
-            <span className="tracking-widest hidden sm:inline">Gujarat Oil Depot</span>
-            <span className="tracking-widest sm:hidden text-xs">GOD</span>
-            
+          <div className="flex items-center gap-2">
+            <span className="tracking-widest truncate max-w-[100px] md:max-w-none">GOD</span>
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
                 else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
-            
+            }} className="hover:scale-110 transition-transform text-base md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
             {actionableCount > 0 && (
               <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
               </span>
             )}
-            
-            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[9px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-base md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
           
-          {/* Right Side Group */}
-          <div className="flex flex-row gap-1 md:gap-2 items-center">
+          <div className="flex gap-2 items-center">
             {userRole && (
-              <div className="p-0.5 md:p-1 flex flex-row gap-0.5 md:gap-1 rounded bg-gray-700">
+              <div className="p-1 flex gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 md:py-1.5 text-[10px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[8px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 md:px-4 py-1 md:py-1.5 text-[10px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
           </div>
         </div>
       </nav>
@@ -1528,14 +1577,14 @@ export default function App() {
                   </thead>
                   <tbody>
                     {Object.values(ledgerData.reduce((acc, row) => {
-                      const key = row.challan_no || row.group_id; 
+                      const key = String(row.challan_no || row.group_id || ''); 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
                       <tr><td colSpan={userRole === 'master' ? "8" : "7"} className="p-6 md:p-8 text-center text-gray-500 font-bold uppercase text-[13px] md:text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
-                      const key = row.challan_no || row.group_id; 
+                      const key = String(row.challan_no || row.group_id || ''); 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
