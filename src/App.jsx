@@ -31,7 +31,7 @@ const playChime = () => {
     gainNode.connect(globalAudioCtx.destination);
     osc.start();
     osc.stop(globalAudioCtx.currentTime + 0.5);
-  } catch (e) { /* silent fail for mobile compatibility */ }
+  } catch (e) { /* silent fail */ }
 };
 
 const triggerHaptic = (pattern = 40) => {
@@ -62,7 +62,7 @@ const blinkTitle = (msg) => {
 const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
 const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 
-// --- M-DATE OFFLINE SEQUENCE GENERATOR ---
+// --- OFFLINE SEQUENCE GENERATOR (M-Date Format) ---
 const getOfflineSequence = (prefix) => {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -70,7 +70,7 @@ const getOfflineSequence = (prefix) => {
   const yy = String(now.getFullYear()).slice(-2);
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
-  if (prefix === 'M') return `M${dd}${mm}${yy}${hh}${min}`;
+  if (prefix === 'M' || prefix === 'MANUAL') return `M${dd}${mm}${yy}${hh}${min}`;
   return `${prefix}${dd}${mm}${yy}${hh}${min}`;
 };
 
@@ -105,7 +105,6 @@ export default function App() {
   
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
-  
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -143,7 +142,7 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
-  // --- ROBUST NOTIFICATION ENGINE (SERVICE WORKER FALLBACK) ---
+  // --- BACKGROUND NOTIFICATIONS ---
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
@@ -156,14 +155,12 @@ export default function App() {
           if (navigator.serviceWorker) {
             navigator.serviceWorker.ready.then(reg => {
               reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
-            }).catch(() => {
-              new Notification(title, { body: body, icon: '/pwa-512x512.png' });
-            });
+            }).catch(() => { new Notification(title, { body: body, icon: '/pwa-512x512.png' }); });
           } else {
             new Notification(title, { body: body, icon: '/pwa-512x512.png' });
           }
         }
-      } catch(e) { /* Safe fallback */ }
+      } catch(e) {}
     }
   };
 
@@ -174,11 +171,9 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // WATCHDOG TIMER TO PREVENT BLACK SCREEN FREEZES
+  // WATCHDOG TIMER (Forces app to load if DB hangs)
   useEffect(() => {
-    const timer = setTimeout(() => {
-       if(loadingAuth) setLoadingAuth(false);
-    }, 3500);
+    const timer = setTimeout(() => { if(loadingAuth) setLoadingAuth(false); }, 3500);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
@@ -190,11 +185,7 @@ export default function App() {
     window.addEventListener('click', initAudio, { once: true });
     window.addEventListener('touchstart', initAudio, { once: true });
     window.addEventListener('keydown', initAudio, { once: true });
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
   }, []);
 
   useEffect(() => {
@@ -213,10 +204,8 @@ export default function App() {
                 const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
                 setAvailableMonths(months);
                 if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
-            } else {
-                setAvailableMonths([new Date().getMonth()]);
-            }
-        } catch(e) { /* fail silently */ }
+            } else { setAvailableMonths([new Date().getMonth()]); }
+        } catch(e) {}
       };
       fetchMonths();
     }
@@ -228,25 +217,15 @@ export default function App() {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
-        if (session) {
-          setSession(session);
-          await fetchRole(session.user.id);
-        } else {
-          setLoadingAuth(false);
-        }
+        if (session) { setSession(session); await fetchRole(session.user.id); } 
+        else { setLoadingAuth(false); }
       } catch (err) { setLoadingAuth(false); }
     };
-    
     initializeAuth();
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        setSession(null); setUserRole(null); setView(''); setLoadingAuth(false);
-      } else if (session) {
-        setSession(session); fetchRole(session.user.id);
-      }
+      if (event === 'SIGNED_OUT') { setSession(null); setUserRole(null); setView(''); setLoadingAuth(false); } 
+      else if (session) { setSession(session); fetchRole(session.user.id); }
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
@@ -266,48 +245,36 @@ export default function App() {
         const currentRole = data.role ? String(data.role).toLowerCase().trim() : 'unassigned';
         setUserRole(currentRole);
         fetchAvailableYears();
-
         if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
         else if (currentRole === 'retail') setView('retail'); 
         else if (currentRole === 'depot') setView('depot'); 
         else setView('unassigned'); 
       }
-    } catch (err) {
-    } finally { setLoadingAuth(false); }
+    } catch (err) { } finally { setLoadingAuth(false); }
   }
 
   async function handleLogin(e) {
-    e.preventDefault(); 
-    triggerHaptic([30, 50]);
-    initAudio(); 
+    e.preventDefault(); triggerHaptic([30, 50]); initAudio(); 
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
-    
     if (data?.user) {
       await fetchRole(data.user.id);
-      
       try {
           if (window.OneSignalDeferred) {
             window.OneSignalDeferred.push(async function(OneSignal) {
-              await OneSignal.init({
-                appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
-                safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
-                notifyButton: { enable: true },
-              });
+              await OneSignal.init({ appId: "YOUR_ONESIGNAL_APP_ID_HERE", safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", notifyButton: { enable: true }});
               OneSignal.User.PushSubscription.optIn();
               const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
-              if (roleData && roleData.role) {
-                 OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim());
-              }
+              if (roleData && roleData.role) { OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim()); }
             });
           }
           if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
             Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
           }
-      } catch(e) { /* Safe fallback */ }
+      } catch(e) {}
     }
     setIsLoggingIn(false);
   }
@@ -358,7 +325,7 @@ export default function App() {
         if (results[1].data) setIncomingDeliveries(results[1].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
         if (results[2].data) setPendingDepotReturns(results[2].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
         if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-    } catch(e) { /* silent fail */ }
+    } catch(e) { }
   };
 
   const fetchLedgerData = async () => {
@@ -368,7 +335,7 @@ export default function App() {
         const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
         const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
         if (data) setLedgerData(data);
-    } catch(e) { /* silent fail */ }
+    } catch(e) { }
   };
 
   const refreshAllData = async () => {
@@ -383,7 +350,6 @@ export default function App() {
     if (userRole === 'depot') count = Object.keys(pendingPOs).length + Object.keys(pendingReturns).length;
     else if (userRole === 'retail') count = Object.keys(incomingDeliveries).length + Object.keys(pendingDepotReturns).length;
     else if (userRole === 'admin' || userRole === 'master') count = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
-    
     setActionableCount(count);
     if (navigator.setAppBadge) {
       if (count > 0) navigator.setAppBadge(count).catch(() => {});
@@ -406,7 +372,6 @@ export default function App() {
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole, isOnline]);
-
   const syncOfflineQueue = async () => {
     if (!isOnline || offlineQueue.length === 0 || isSyncing) return;
     setIsSyncing(true); let remaining = [...offlineQueue]; let syncedCount = 0;
@@ -557,12 +522,126 @@ export default function App() {
     }
     return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
   };
-  // ==========================
-  // --- EXCEL EXPORT ENGINE ---
-  // ==========================
+
+  // --- REBUILT PRE-PRINTED PDF ENGINE (Strict Grid down to Signature Box) ---
+  const printPDF = (challanNo, itemsList) => {
+    const doc = new jsPDF({ format: 'a5' }); 
+    const isReturn = String(challanNo).startsWith('RT');
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
+    let totalNos = 0;
+    
+    const drawPageHeaders = () => {
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
+        
+        doc.setFontSize(9);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        
+        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
+
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
+        doc.setFont("helvetica", "normal");
+    };
+
+    const drawPageGrid = (endY) => {
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
+        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
+        doc.line(5, endY, 143, endY); 
+    };
+
+    const drawSignatures = (sigY) => {
+        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
+        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
+          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
+          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
+        }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
+        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
+    };
+
+    drawPageHeaders();
+    let y = 53; const maxY = 165; 
+
+    itemsList.forEach((item, index) => {
+      const desc = String(item.description || item.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
+      const rowHeight = (splitDesc.length * 4) + 1;
+      
+      // Page Break Engine
+      if (y + rowHeight > maxY) {
+          drawPageGrid(maxY);
+          drawSignatures(maxY + 15);
+          doc.line(5, maxY, 5, maxY + 22); doc.line(143, maxY, 143, maxY + 22); doc.line(5, maxY + 22, 143, maxY + 22);
+          doc.addPage(); drawPageHeaders(); y = 53;
+      }
+
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
+      doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); 
+      doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" });
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
+        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); 
+      }
+      y += rowHeight + 2; 
+    });
+
+    // LAST PAGE CLOSURE
+    drawPageGrid(y);
+    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
+    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    const sigY = y + 20; drawSignatures(sigY);
+    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+    }
+    doc.save(`${challanNo}.pdf`);
+  };
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...');
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target.result); const workbook = XLSX.read(data, { type: 'array' }); let finalItemsToUpload = [];
+        const normalizeRow = (row) => { const normalized = {}; for (let key in row) normalized[String(key).toLowerCase().trim()] = row[key]; return normalized; };
+        ['SERVO', 'TVS'].forEach(sheetName => {
+          const sheet = workbook.SheetNames.find(s => String(s).toUpperCase() === sheetName);
+          if (sheet) {
+            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
+              const norm = normalizeRow(row); 
+              return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null };
+            }).filter(item => item.description);
+            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
+          }
+        });
+        await supabase.from('master_items').delete().neq('description', 'dummy'); 
+        await supabase.from('master_items').insert(finalItemsToUpload);
+        refreshAllData();
+      } catch (error) { setUploadStatus(`Error`); }
+    };
+    reader.readAsArrayBuffer(file); 
+  };
+
   const downloadLedger = () => {
-    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
+    if(ledgerData.length === 0) { alert(`No data to export for ${monthNames[ledgerMonth]} ${ledgerYear}.`); return; }
     const dispatchedDataObj = {}; const returnsDataObj = {};
+    
     ledgerData.forEach(row => {
       const key = String(row.challan_no || row.group_id || 'UNKNOWN');
       if (row.status === 'RETURN_ACCEPTED') {
@@ -673,7 +752,6 @@ export default function App() {
   const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
     setItemState(item); setSearchState(item.description); 
     let newUnit = getUnit(item.description); setUnitState(newUnit);
-    
     if (item.category === 'TVS') {
         const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
         learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));
@@ -687,123 +765,9 @@ export default function App() {
             aliases[sq] = item.description; localStorage.setItem('god_aliases', JSON.stringify(aliases));
         }
     }
-    
     triggerHaptic(30);
     const isDesktop = window.innerWidth > 768;
     if (isDesktop) setTimeout(() => focusRef?.current?.focus(), 50);
-  };
-
-  const smartSearch = (query) => {
-    if (!query) return []; 
-    const sq = normalizeString(query);
-    const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}');
-    const aliasedDesc = aliases[sq];
-    
-    const terms = String(query).toUpperCase().split(' ').filter(Boolean); 
-    let results = masterItems.filter(item => {
-       if (aliasedDesc && normalizeString(item.description) === normalizeString(aliasedDesc)) return true;
-       if (item.sku && normalizeString(item.sku) === sq) return true;
-       const desc = cleanDesc(item.description); const sku = item.sku ? cleanDesc(item.sku) : '';
-       return terms.every(term => desc.includes(term) || sku.includes(term));
-    });
-    
-    if (aliasedDesc) {
-        const exactMatch = results.find(i => normalizeString(i.description) === normalizeString(aliasedDesc));
-        if (exactMatch) {
-            results = results.filter(i => normalizeString(i.description) !== normalizeString(aliasedDesc));
-            results.unshift(exactMatch);
-        }
-    }
-    return results.slice(0, 50);
-  };
-
-  // --- REBUILT PRE-PRINTED PDF ENGINE ---
-  const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); 
-    const isReturn = String(challanNo).startsWith('RT');
-    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
-    let totalNos = 0;
-    
-    const drawPageHeaders = () => {
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
-        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
-        
-        doc.setFontSize(9);
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-        
-        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
-
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
-        doc.setFont("helvetica", "normal");
-    };
-
-    const drawPageGrid = (endY) => {
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-        doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
-        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
-        doc.line(5, endY, 143, endY); 
-    };
-
-    const drawSignatures = (sigY) => {
-        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
-        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
-          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
-        }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
-        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
-    };
-
-    drawPageHeaders();
-    let y = 53; const maxY = 165; 
-
-    itemsList.forEach((item, index) => {
-      const desc = String(item.description || item.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
-      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
-      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
-      const rowHeight = (splitDesc.length * 4) + 1;
-      
-      if (y + rowHeight > maxY) {
-          drawPageGrid(maxY);
-          drawSignatures(maxY + 15);
-          doc.line(5, maxY, 5, maxY + 22); doc.line(143, maxY, 143, maxY + 22); doc.line(5, maxY + 22, 143, maxY + 22);
-          doc.addPage(); drawPageHeaders(); y = 53;
-      }
-
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); 
-      doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); 
-      doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" });
-      doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      
-      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
-        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); 
-      }
-      y += rowHeight + 2; 
-    });
-
-    drawPageGrid(y);
-    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
-    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
-    
-    const sigY = y + 20; drawSignatures(sigY);
-    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
-
-    const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
-    }
-    doc.save(`${challanNo}.pdf`);
   };
 
   const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix, focusRef, currentSelectedItem) => {
@@ -837,35 +801,25 @@ export default function App() {
     setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
+  // --- ACTIONS (RETAIL) ---
   const retailFilteredItems = smartSearch(retailSearch);
-  
   const addToRetailCart = (e) => {
     if (e) e.preventDefault();
     if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
-    
-    triggerHaptic(40);
-    let finalQty = parseInt(retailQty);
-    if (finalQty < 0) {
-        setRetailMode('RETURN');
-        finalQty = Math.abs(finalQty);
-    }
-
+    triggerHaptic(40); let finalQty = parseInt(retailQty);
+    if (finalQty < 0) { setRetailMode('RETURN'); finalQty = Math.abs(finalQty); }
     setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
     setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
     if (isDesktop) setTimeout(() => retailSearchRef.current?.focus(), 50); 
   };
-  
   const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index] = { ...updated[index], req_qty: val }; setRetailCart(updated); };
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
   const submitRetailAction = async (e) => {
     if (e) e.preventDefault();
     if (retailCart.length === 0 || isProcessing) return; 
-    
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
         const tx = retailCart.map(item => ({ 
@@ -873,158 +827,94 @@ export default function App() {
           unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
           challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
         }));
-        
-        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
-          setRetailCart([]); setRetailReturnNote('');
-        });
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => { setRetailCart([]); setRetailReturnNote(''); });
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
+  // --- ACTIONS (DEPOT) ---
   const depotFilteredItems = smartSearch(searchQuery);
-  
   const addToDepotCart = (e) => {
     if (e) e.preventDefault();
     if (!selectedItem || !qty || parseInt(qty) === 0) return;
-    
-    triggerHaptic(40);
-    let finalQty = parseInt(qty);
-    if (finalQty < 0) {
-        setDepotMode('RETURN_REQUEST');
-        finalQty = Math.abs(finalQty);
-    }
-
+    triggerHaptic(40); let finalQty = parseInt(qty);
+    if (finalQty < 0) { setDepotMode('RETURN_REQUEST'); finalQty = Math.abs(finalQty); }
     setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
     setSearchQuery(''); setQty(''); setSelectedItem(null);
     const isDesktop = window.innerWidth > 768;
     if (isDesktop) setTimeout(() => depotSearchRef.current?.focus(), 50); 
   };
-
   const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index] = { ...updated[index], disp_qty: val }; setDepotCart(updated); };
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
   const submitDepotAction = async (e) => {
     e.preventDefault(); 
     if (depotCart.length === 0 || isProcessing) return;
-    
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         if (depotMode === 'DISPATCH') {
           const challanNo = await getNextSequence('CN'); const groupId = getOfflineSequence('M');
           const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
-            printPDF(challanNo, depotCart); setDepotCart([]); 
-          });
+          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => { printPDF(challanNo, depotCart); setDepotCart([]); });
         } else {
           const groupId = await getNextSequence('RR');
           const tx = depotCart.map(item => ({ 
             group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
             unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
           }));
-          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
-            setDepotCart([]); setDepotReturnNote('');
-          });
+          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => { setDepotCart([]); setDepotReturnNote(''); });
         }
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
-
-  // --- SAFE VERIFICATION LOGIC ---
+  // --- VERIFICATION LOGIC (SEQUENTIAL AWAIT TO PREVENT LOCKUP) ---
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30);
     const checks = {}; items.forEach((_, i) => checks[i] = false);
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
-    setVerifyModal({ 
-      challanNo, 
-      items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
-      checks, 
-      isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
-    });
+    setVerifyModal({ challanNo, items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), checks, isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false });
   };
-
-  const toggleVerifyCheck = (index) => {
-      triggerHaptic(20);
-      setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
-  };
+  const toggleVerifyCheck = (index) => { triggerHaptic(20); setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } })); };
 
   const acceptDelivery = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
 
-    // USE .some() TO PREVENT LOCKUP
+    // ONLY check items the user has checked
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
-    if (checkedIndexes.length === 0) {
-        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
-        return;
-    }
+    if (checkedIndexes.length === 0) { triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning"); return; }
 
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
-        
-        // SEQUENTIAL AWAIT
         for (let i = 0; i < checkedIndexes.length; i++) {
             const index = checkedIndexes[i];
             const item = verifyModal.items[index];
             const finalQty = parseInt(item.edit_qty) || 0;
             await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         }
-
-        setVerifyModal(null); 
-        refreshAllData();
+        setVerifyModal(null); refreshAllData();
         triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
-    } catch (err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch (err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  // --- SAFE DISPATCH PO LOGIC ---
+  // --- EDIT PO / DISPATCH LOGIC ---
   const openEditPOModal = (groupId, items) => { 
       triggerHaptic(30);
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  
-  const handleEditPOQty = (index, val) => { 
-      const updated = [...editPOModal.items]; 
-      updated[index] = { ...updated[index], edit_qty: val }; 
-      setEditPOModal({ ...editPOModal, items: updated }); 
-  };
+  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!editPOModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
-        const challanNo = await getNextSequence('CN'); 
-        const backorders = []; 
-        const printItems = [];
-        let newPO = null;
+        const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = []; let newPO = null;
 
-        // SEQUENTIAL AWAIT 
         for (const item of editPOModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; 
-          const reqQty = parseInt(item.req_qty) || 0;
-
-          if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
-              continue; 
-          }
+          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
+          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
           
           await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
@@ -1038,49 +928,29 @@ export default function App() {
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
         
-        setEditPOModal(null); 
-        refreshAllData();
-        triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        setEditPOModal(null); refreshAllData(); triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
+  // --- PROCESS RETURN REQUEST LOGIC ---
   const openProcessReturnModal = (groupId, items) => { 
       triggerHaptic(30);
       const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
       setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
   };
-  
-  const handleProcessReturnQty = (index, val) => { 
-      const updated = [...processReturnModal.items]; 
-      updated[index] = { ...updated[index], edit_qty: val }; 
-      setProcessReturnModal({ ...processReturnModal, items: updated }); 
-  };
+  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!processReturnModal || isProcessing) return; 
     
-    triggerHaptic([40, 40, 100]);
-    setIsProcessing(true);
-    
+    triggerHaptic([40, 40, 100]); setIsProcessing(true);
     try {
-        const challanNo = await getNextSequence('RT'); 
-        const backorders = []; 
-        const printItems = [];
-        let newRR = null;
+        const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = []; let newRR = null;
 
         for (const item of processReturnModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; 
-          const reqQty = parseInt(item.req_qty) || 0;
-
-          if (dispatchQty <= 0) { 
-              await supabase.from('transactions').delete().eq('id', item.id); 
-              continue; 
-          }
+          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
+          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
 
           await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
@@ -1094,17 +964,13 @@ export default function App() {
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
         
-        setProcessReturnModal(null); 
-        refreshAllData();
-        triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
-    } catch(err) {
-        triggerSystemAlert("Error", err.message, "error");
-    } finally {
-        setIsProcessing(false);
-    }
+        setProcessReturnModal(null); refreshAllData(); triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
+    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  // --- CLEAN INITIALIZATION SCREEN ---
+  // ==========================================
+  // --- UI RENDERING ---
+  // ==========================================
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
@@ -1290,7 +1156,7 @@ export default function App() {
 
       {/* SINGLE LINE NAVIGATION BAR */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-2.5 md:p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex justify-between items-center w-full font-bold uppercase text-[10px] md:text-sm">
+        <div className="container mx-auto flex flex-row justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm">
           <div className="flex items-center gap-1 md:gap-2">
             <span className="tracking-widest hidden sm:inline">Gujarat Oil Depot</span>
             <span className="tracking-widest sm:hidden text-xs">GOD</span>
@@ -1310,7 +1176,6 @@ export default function App() {
                 <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
             )}
           </div>
-          
           <div className="flex flex-row gap-1 md:gap-2 items-center">
             {userRole && (
               <div className="p-0.5 md:p-1 flex flex-row gap-0.5 md:gap-1 rounded bg-gray-700">
@@ -1329,8 +1194,6 @@ export default function App() {
       </nav>
 
       <main className="container mx-auto p-3 md:p-4">
-        
-        {/* ================= VIEWS ================= */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -1351,7 +1214,6 @@ export default function App() {
                   </label>
                 )}
               </div>
-              
               <div className="flex items-center gap-2">
                 <span className="text-[11px] md:text-[13px] font-bold uppercase mr-1">Ledger Month:</span>
                 <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1 md:p-1.5 text-[13px] md:text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
@@ -1397,7 +1259,6 @@ export default function App() {
                     }, {}))
                     .sort((a, b) => String(b.keyValue).localeCompare(String(a.keyValue))) 
                     .map((group, idx) => {
-                      
                       const sortedItems = [...group.items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
@@ -1435,14 +1296,7 @@ export default function App() {
                               {(userRole === 'admin' || userRole === 'master') ? (
                                 openNoteId === group.keyValue ? (
                                   <div className="flex flex-col gap-1 md:gap-1.5 w-full mt-1">
-                                    <textarea
-                                      className="w-full border-2 border-black p-1.5 md:p-2 text-[11px] md:text-[13px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text"
-                                      rows="3"
-                                      value={tempNoteText}
-                                      onChange={(e) => setTempNoteText(e.target.value)}
-                                      placeholder="Enter note..."
-                                      autoFocus
-                                    />
+                                    <textarea className="w-full border-2 border-black p-1.5 md:p-2 text-[11px] md:text-[13px] font-bold focus:outline-none focus:bg-yellow-50 resize-none whitespace-pre-wrap break-words select-text" rows="3" value={tempNoteText} onChange={(e) => setTempNoteText(e.target.value)} placeholder="Enter note..." autoFocus />
                                     <div className="flex gap-1 md:gap-1.5 mt-1">
                                       <button onClick={() => saveAdminNote(group.keyField, group.keyValue)} className="bg-blue-600 text-white px-1.5 md:px-2 py-1 md:py-1.5 text-[10px] md:text-[11px] font-bold uppercase flex-1 border-2 border-blue-800 active:translate-y-px">SAVE</button>
                                       <button onClick={() => setOpenNoteId(null)} className="bg-gray-200 text-gray-800 px-1.5 md:px-2 py-1 md:py-1.5 text-[10px] md:text-[11px] font-bold uppercase flex-1 border-2 border-gray-400 active:translate-y-px">CANCEL</button>
@@ -1450,28 +1304,15 @@ export default function App() {
                                   </div>
                                 ) : (
                                   <div className="flex flex-col items-start gap-1">
-                                    <button 
-                                      onClick={() => { triggerHaptic(20); setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }}
-                                      className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100 transition-colors"
-                                    >
+                                    <button onClick={() => { triggerHaptic(20); setOpenNoteId(group.keyValue); setTempNoteText(group.admin_note || ""); }} className="text-[10px] md:text-[11px] px-2 md:px-2.5 py-1 md:py-1.5 border border-gray-400 rounded shadow-sm font-bold uppercase bg-white hover:bg-gray-100 transition-colors">
                                       {group.admin_note ? 'EDIT NOTE' : '+ ADD NOTE'}
                                     </button>
-                                    {group.admin_note && (
-                                      <div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">
-                                        {group.admin_note}
-                                      </div>
-                                    )}
+                                    {group.admin_note && (<div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">{group.admin_note}</div>)}
                                   </div>
                                 )
                               ) : (
                                 <div className="flex flex-col items-start gap-1">
-                                  {group.admin_note ? (
-                                    <div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">
-                                      {group.admin_note}
-                                    </div>
-                                  ) : (
-                                    <span className="text-gray-400 text-[11px] md:text-[13px] italic mt-1 md:mt-1.5">No Note</span>
-                                  )}
+                                  {group.admin_note ? (<div className="text-[11px] md:text-[13px] font-bold text-gray-800 whitespace-pre-wrap break-words leading-tight mt-1 md:mt-1.5">{group.admin_note}</div>) : (<span className="text-gray-400 text-[11px] md:text-[13px] italic mt-1 md:mt-1.5">No Note</span>)}
                                 </div>
                               )}
                             </div>
@@ -1481,33 +1322,13 @@ export default function App() {
                         </td>
                         <td className="p-2 md:p-3 text-center vertical-middle select-none">
                           {group.challan_no && group.status !== 'DELETED' && isWithin30Days(group.timestamp) ? (
-                            <button onClick={() => {
-                                triggerHaptic(30);
-                                const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no);
-                                printPDF(group.challan_no, fullChallanItems);
-                              }} 
-                              className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 md:px-2.5 py-1 md:py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none transition-colors"
-                            >
-                              PDF
-                            </button>
-                          ) : group.challan_no ? (
-                            <span className="text-[10px] md:text-[11px] text-gray-400 font-bold">{group.status === 'DELETED' ? 'VOID' : 'LOCKED'}</span>
-                          ) : (
-                            <span className="text-gray-300">-</span>
-                          )}
+                            <button onClick={() => { triggerHaptic(30); const fullChallanItems = ledgerData.filter(i => i.challan_no === group.challan_no); printPDF(group.challan_no, fullChallanItems); }} className="text-[10px] md:text-[11px] font-bold bg-white border border-gray-400 text-gray-800 hover:bg-gray-100 px-2 md:px-2.5 py-1 md:py-1.5 rounded shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] active:translate-y-px active:shadow-none transition-colors">PDF</button>
+                          ) : group.challan_no ? (<span className="text-[10px] md:text-[11px] text-gray-400 font-bold">{group.status === 'DELETED' ? 'VOID' : 'LOCKED'}</span>) : (<span className="text-gray-300">-</span>)}
                         </td>
                         {userRole === 'master' && (
                           <td className="p-2 md:p-3 text-center vertical-middle select-none border-l border-gray-300">
                             <div className="flex justify-center gap-2 md:gap-3">
-                               <button onClick={() => { 
-                                  triggerHaptic(20); 
-                                  setMasterEditModal({ 
-                                    keyField: group.keyField, 
-                                    keyValue: group.keyValue, 
-                                    newKeyValue: group.keyValue, 
-                                    items: sortedItems.map(i => ({ ...i, original_item_desc: i.item_desc, edit_qty: i.disp_qty || i.req_qty })) 
-                                  }); 
-                               }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
+                               <button onClick={() => { triggerHaptic(20); setMasterEditModal({ keyField: group.keyField, keyValue: group.keyValue, newKeyValue: group.keyValue, items: sortedItems.map(i => ({ ...i, original_item_desc: i.item_desc, edit_qty: i.disp_qty || i.req_qty })) }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Edit Record">✏️</button>
                                <button onClick={() => { triggerHaptic(20); setDeleteModal({ keyField: group.keyField, keyValue: group.keyValue }); }} className="text-base md:text-lg hover:scale-110 active:scale-95 transition-transform" title="Delete Record">🗑️</button>
                             </div>
                           </td>
@@ -1528,8 +1349,6 @@ export default function App() {
 
         {view === 'depot' && (
           <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
-            
-            {/* DATA ENTRY SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
@@ -1577,10 +1396,7 @@ export default function App() {
               </form>
             </div>
 
-            {/* CART & INBOX SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
-              
-              {/* THE CART */}
               {depotCart.length > 0 && (
                 <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 md:p-4 ${depotMode === 'RETURN_REQUEST' ? 'border-red-400' : 'border-blue-400'}`}>
                   <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
@@ -1610,11 +1426,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* INBOXES */}
               {!hasDepotInbox && depotCart.length === 0 && (
-                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
-                  NO PENDING INBOX TASKS
-                </div>
+                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">NO PENDING INBOX TASKS</div>
               )}
 
               {Object.keys(pendingPOs).length > 0 && (
@@ -1684,8 +1497,6 @@ export default function App() {
         {/* RETAIL VIEW */}
         {view === 'retail' && (
           <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
-            
-            {/* DATA ENTRY SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
               <div className="w-full bg-white border-2 border-gray-400 shadow-sm flex flex-col">
                 <div className="bg-gray-200 border-b-2 border-gray-400 px-3 md:px-4 py-1.5 md:py-2 font-bold flex space-x-2 text-[13px] md:text-sm uppercase text-gray-800">
@@ -1733,10 +1544,7 @@ export default function App() {
               </form>
             </div>
 
-            {/* CART & INBOX SIDE */}
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-2 md:order-2">
-              
-              {/* THE CART */}
               {retailCart.length > 0 && (
                 <div className={`w-full bg-white border-2 shadow-sm flex flex-col p-3 md:p-4 ${retailMode === 'RETURN' ? 'border-red-400' : 'border-slate-400'}`}>
                   <table className="w-full border-collapse mb-3 md:mb-4 text-[13px] md:text-sm">
@@ -1766,11 +1574,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* INBOXES */}
               {!hasRetailInbox && retailCart.length === 0 && (
-                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">
-                  NO PENDING INBOX TASKS
-                </div>
+                <div className="w-full border-2 border-dashed border-gray-400 bg-gray-50 text-gray-400 text-center p-8 font-black uppercase text-sm">NO PENDING INBOX TASKS</div>
               )}
 
               {Object.keys(incomingDeliveries).length > 0 && (
