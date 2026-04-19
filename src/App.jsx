@@ -148,21 +148,23 @@ export default function App() {
     setToasts(prev => [...prev, { id, title, body, type }]);
     setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
 
-    if (document.visibilityState !== 'visible') {
-      playChime();
-      try {
-        if ("Notification" in window && Notification.permission === "granted") {
-          if (navigator.serviceWorker) {
-            navigator.serviceWorker.ready.then(reg => {
-              reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
-            }).catch(() => {
-              new Notification(title, { body: body, icon: '/pwa-512x512.png' });
-            });
-          } else {
-            new Notification(title, { body: body, icon: '/pwa-512x512.png' });
-          }
+    playChime();
+    
+    // --- FIX: REMOVED VISIBILITY CHECK. OS NOTIFICATIONS ALWAYS FIRE NOW ---
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        // 1. Fire Standard Desktop OS Notification
+        new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+        
+        // 2. Fire Android Service Worker Notification (Required for mobile)
+        if (navigator.serviceWorker) {
+          navigator.serviceWorker.ready.then(reg => {
+            reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+          }).catch(() => {});
         }
-      } catch(e) { /* Safe fallback for strict mobile browsers */ }
+      }
+    } catch(e) { 
+      console.warn("Native Notification Blocked by OS"); 
     }
   };
 
