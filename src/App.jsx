@@ -5,8 +5,11 @@ import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
+// ==========================================
 // --- HARDWARE ENGINES (Audio & Haptics) ---
+// ==========================================
 let globalAudioCtx = null;
+
 const initAudio = () => {
   if (!globalAudioCtx) {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -32,7 +35,9 @@ const playChime = () => {
       gainNode.connect(globalAudioCtx.destination);
       osc.start();
       osc.stop(globalAudioCtx.currentTime + 0.5);
-    } catch (e) { /* silent fail for mobile compatibility */ }
+    } catch (e) {
+      console.warn("Audio play failed silently.");
+    }
   }, 0);
 };
 
@@ -42,7 +47,9 @@ const triggerHaptic = (pattern = 40) => {
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate(pattern);
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.warn("Haptics failed silently.");
+    }
   }, 0);
 };
 
@@ -62,11 +69,15 @@ const blinkTitle = (msg) => {
   }, { once: true });
 };
 
+// ==========================================
 // --- HYPER-STRICT SAFE DATA CLEANERS ---
+// ==========================================
+// FIX: Using String(d || '') prevents mobile browsers from crashing to a White Screen if a DB row is missing data
 const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
 const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 
 // --- M-DATE OFFLINE SEQUENCE GENERATOR ---
+// FIX: Offline fallbacks now cleanly generate M1904261128 format instead of MANUAL-177...
 const getOfflineSequence = (prefix) => {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -74,7 +85,10 @@ const getOfflineSequence = (prefix) => {
   const yy = String(now.getFullYear()).slice(-2);
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
-  if (prefix === 'M' || prefix === 'MANUAL') return `M${dd}${mm}${yy}${hh}${min}`;
+  
+  if (prefix === 'M' || prefix === 'MANUAL') {
+      return `M${dd}${mm}${yy}${hh}${min}`;
+  }
   return `${prefix}${dd}${mm}${yy}${hh}${min}`;
 };
 
@@ -144,28 +158,44 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
-  // --- NATIVE NOTIFICATION ENGINE (ANDROID SERVICE WORKER ENABLED) ---
+  // ==========================================
+  // --- ROBUST NOTIFICATION ENGINE ---
+  // ==========================================
+  // FIX: Android Background Support via Service Workers
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
-    setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
+    
+    setTimeout(() => {
+        setToasts(prev => prev.filter(t => t.id !== id)); 
+    }, 4000);
+    
     playChime();
     
     try {
       if ("Notification" in window && Notification.permission === "granted") {
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(registrations => {
-            if (registrations.length > 0) {
-              registrations[0].showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png', vibrate: [200, 100, 200] });
+          navigator.serviceWorker.ready.then(reg => {
+            if (reg) {
+              reg.showNotification(title, { 
+                  body: body, 
+                  icon: '/pwa-512x512.png', 
+                  badge: '/pwa-512x512.png', 
+                  vibrate: [200, 100, 200] 
+              });
             } else {
               new Notification(title, { body: body, icon: '/pwa-512x512.png' });
             }
-          }).catch(() => { new Notification(title, { body: body, icon: '/pwa-512x512.png' }); });
+          }).catch(() => { 
+              new Notification(title, { body: body, icon: '/pwa-512x512.png' }); 
+          });
         } else {
           new Notification(title, { body: body, icon: '/pwa-512x512.png' });
         }
       }
-    } catch(e) { console.warn("Native OS alert blocked."); }
+    } catch(e) { 
+        console.warn("Native OS alert blocked."); 
+    }
   };
 
   const depotSearchRef = useRef(null);
@@ -175,14 +205,22 @@ export default function App() {
 
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
+  // ==========================================
+  // --- LIFECYCLE & SYNC HOOKS ---
+  // ==========================================
+
+  // FIX: Extended Watchdog timer to 6s so weak mobile data doesn't trigger false white screens
   useEffect(() => {
-    const timer = setTimeout(() => { if(loadingAuth) setLoadingAuth(false); }, 6000);
+    const timer = setTimeout(() => { 
+        if(loadingAuth) setLoadingAuth(false); 
+    }, 6000);
     return () => clearTimeout(timer);
   }, [loadingAuth]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
+    
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('click', initAudio, { once: true });
@@ -206,7 +244,11 @@ export default function App() {
         try {
             const startDate = new Date(ledgerYear, 0, 1).toISOString();
             const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
-            const { data } = await supabase.from('transactions').select('timestamp').gte('timestamp', startDate).lte('timestamp', endDate);
+            const { data } = await supabase.from('transactions')
+                                           .select('timestamp')
+                                           .gte('timestamp', startDate)
+                                           .lte('timestamp', endDate);
+                                           
             if (data && data.length > 0) {
                 const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
                 setAvailableMonths(months);
@@ -214,7 +256,7 @@ export default function App() {
             } else {
                 setAvailableMonths([new Date().getMonth()]);
             }
-        } catch(e) {}
+        } catch(e) { /* fail silently */ }
       };
       fetchMonths();
     }
@@ -226,15 +268,29 @@ export default function App() {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
-        if (session) { setSession(session); await fetchRole(session.user.id); } 
-        else { setLoadingAuth(false); }
-      } catch (err) { setLoadingAuth(false); }
+        if (session) {
+            setSession(session);
+            await fetchRole(session.user.id);
+        } else {
+            setLoadingAuth(false);
+        }
+      } catch (err) {
+          setLoadingAuth(false);
+      }
     };
+    
     initializeAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') { setSession(null); setUserRole(null); setView(''); setLoadingAuth(false); } 
-      else if (session) { setSession(session); fetchRole(session.user.id); }
+      if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setUserRole(null);
+          setView('');
+          setLoadingAuth(false);
+      } else if (session) {
+          setSession(session);
+          fetchRole(session.user.id);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -254,26 +310,35 @@ export default function App() {
       if (error) throw error;
       if (data) {
         const currentRole = data.role ? String(data.role).toLowerCase().trim() : 'unassigned';
-        setUserRole(currentRole); fetchAvailableYears();
+        setUserRole(currentRole);
+        fetchAvailableYears();
 
         if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
         else if (currentRole === 'retail') setView('retail'); 
         else if (currentRole === 'depot') setView('depot'); 
         else setView('unassigned'); 
       }
-    } catch (err) { } finally { setLoadingAuth(false); }
+    } catch (err) { 
+        /* fail silently */ 
+    } finally {
+        setLoadingAuth(false);
+    }
   }
 
   async function handleLogin(e) {
-    e.preventDefault(); triggerHaptic([30, 50]); initAudio(); 
+    e.preventDefault(); 
+    triggerHaptic([30, 50]); 
+    initAudio(); 
     
-    // FIRE PERMISSION REQUEST ON CLICK IMMEDIATELY
+    // FIX: Request notification permission exactly on interaction
     if ("Notification" in window && Notification.permission === "default") {
         try { Notification.requestPermission(); } catch(err) { }
     }
 
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
-    setLoginError(''); setIsLoggingIn(true); 
+    setLoginError(''); 
+    setIsLoggingIn(true); 
+    
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
@@ -283,13 +348,19 @@ export default function App() {
       try {
           if (window.OneSignalDeferred) {
             window.OneSignalDeferred.push(async function(OneSignal) {
-              await OneSignal.init({ appId: "YOUR_ONESIGNAL_APP_ID_HERE", safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", notifyButton: { enable: false }});
+              await OneSignal.init({
+                  appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
+                  safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
+                  notifyButton: { enable: false }
+              });
               OneSignal.User.PushSubscription.optIn();
               const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
-              if (roleData && roleData.role) { OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim()); }
+              if (roleData && roleData.role) {
+                  OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim());
+              }
             });
           }
-      } catch(e) {}
+      } catch(e) { /* Safe fallback */ }
     }
     setIsLoggingIn(false);
   }
@@ -301,9 +372,12 @@ export default function App() {
       const currentYear = new Date().getFullYear();
       if (data && data.length > 0) {
         const firstYear = new Date(data[0].timestamp).getFullYear();
-        const years = []; for (let i = firstYear; i <= currentYear; i++) years.push(i);
+        const years = [];
+        for (let i = firstYear; i <= currentYear; i++) { years.push(i); }
         setAvailableYears(years.reverse());
-      } else { setAvailableYears([currentYear]); }
+      } else {
+        setAvailableYears([currentYear]);
+      }
     } catch(e) {}
   };
 
@@ -313,14 +387,25 @@ export default function App() {
       const { data, error } = await supabase.from('master_items').select('*');
       if (error) throw error;
       if (data && data.length > 0) {
-        setMasterItems(data); setUploadStatus(`${data.length} SKUs AVAILABLE`); localStorage.setItem('god_cached_items', JSON.stringify(data));
+        setMasterItems(data);
+        setUploadStatus(`${data.length} SKUs AVAILABLE`);
+        localStorage.setItem('god_cached_items', JSON.stringify(data));
       } else {
         const cached = localStorage.getItem('god_cached_items');
-        if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); } else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
+        if (cached) {
+            setMasterItems(JSON.parse(cached));
+            setUploadStatus('OFFLINE CACHE ACTIVE');
+        } else {
+            setMasterItems([]);
+            setUploadStatus('WAITING UPLOAD');
+        }
       }
     } catch (err) {
       const cached = localStorage.getItem('god_cached_items');
-      if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
+      if (cached) {
+          setMasterItems(JSON.parse(cached));
+          setUploadStatus('OFFLINE CACHE ACTIVE');
+      }
     }
   };
 
@@ -336,7 +421,7 @@ export default function App() {
         if (dispRes.data) setIncomingDeliveries(dispRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
         if (retReqRes.data) setPendingDepotReturns(retReqRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
         if (retInitRes.data) setPendingReturns(retInitRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-    } catch(e) {}
+    } catch(e) { /* silent fail */ }
   };
 
   const fetchLedgerData = async () => {
@@ -346,21 +431,33 @@ export default function App() {
         const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
         const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
         if (data) setLedgerData(data);
-    } catch(e) {}
+    } catch(e) { /* silent fail */ }
   };
 
-  const refreshAllData = async () => { if (!session) return; await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]); };
-  useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
+  const refreshAllData = async () => {
+      if (!session) return;
+      await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]);
+  };
+
+  useEffect(() => {
+      refreshAllData();
+  }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
 
   useEffect(() => {
     let count = 0;
     if (userRole === 'depot') count = Object.keys(pendingPOs).length + Object.keys(pendingReturns).length;
     else if (userRole === 'retail') count = Object.keys(incomingDeliveries).length + Object.keys(pendingDepotReturns).length;
     else if (userRole === 'admin' || userRole === 'master') count = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
+    
     setActionableCount(count);
-    if (navigator.setAppBadge) { if (count > 0) navigator.setAppBadge(count).catch(() => {}); else navigator.clearAppBadge().catch(() => {}); }
+    
+    if (navigator.setAppBadge) {
+      if (count > 0) navigator.setAppBadge(count).catch(() => {});
+      else navigator.clearAppBadge().catch(() => {});
+    }
   }, [pendingPOs, pendingDepotReturns, incomingDeliveries, pendingReturns, userRole]);
 
+  // FIX: Full channel listener covering all events
   useEffect(() => {
     if (!session || !userRole || !isOnline) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
@@ -369,7 +466,8 @@ export default function App() {
             if (payload.new.status === 'RETURN_REQUESTED' && (userRole === 'admin' || userRole === 'master' || userRole === 'retail')) { triggerSystemAlert("Return Request", `Return Request ${payload.new.group_id} has been submitted.`); refreshAllData(); }
           }
           if (payload.eventType === 'UPDATE') {
-             const newSt = payload.new.status; const oldSt = payload.old.status;
+             const newSt = payload.new.status;
+             const oldSt = payload.old.status;
              if (oldSt !== newSt) {
                  if (newSt === 'DISPATCHED' && (userRole === 'retail' || userRole === 'admin' || userRole === 'master')) { triggerSystemAlert("Goods Dispatched 🚚", `Challan ${payload.new.challan_no} is en route.`); }
                  if (newSt === 'ACCEPTED' && (userRole === 'depot' || userRole === 'admin' || userRole === 'master')) { triggerSystemAlert("Verification Complete ✅", `Retail verified Challan ${payload.new.challan_no}.`); }
@@ -381,68 +479,150 @@ export default function App() {
           }
           if (payload.eventType === 'DELETE' && userRole === 'retail') { triggerSystemAlert("Order Cancelled", "A pending item has been cancelled by the Depot."); refreshAllData(); }
         }).subscribe();
+        
     return () => supabase.removeChannel(channel);
   }, [session, userRole, isOnline]);
 
+  // ==========================================
+  // --- DATABASE EXECUTORS ---
+  // ==========================================
+  
   const syncOfflineQueue = async () => {
     if (!isOnline || offlineQueue.length === 0 || isSyncing) return;
-    setIsSyncing(true); let remaining = [...offlineQueue]; let syncedCount = 0;
+    setIsSyncing(true);
+    let remaining = [...offlineQueue];
+    let syncedCount = 0;
+    
     for (const item of offlineQueue) {
       const { error } = await supabase.from('transactions').insert(item.payload);
-      if (!error) { remaining = remaining.filter(q => q.id !== item.id); syncedCount++; }
+      if (!error) {
+          remaining = remaining.filter(q => q.id !== item.id);
+          syncedCount++;
+      }
     }
-    setOfflineQueue(remaining); setIsSyncing(false);
-    if (syncedCount > 0) { triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`); refreshAllData(); }
+    setOfflineQueue(remaining);
+    setIsSyncing(false);
+    
+    if (syncedCount > 0) {
+        triggerSystemAlert("Sync Complete", `${syncedCount} offline record(s) uploaded.`);
+        refreshAllData();
+    }
   };
 
   const executeTransaction = async (txPayload, alertTitle, alertMsg, onSuccess) => {
     if (onSuccess) onSuccess(); 
     if (isOnline) {
       const { error } = await supabase.from('transactions').insert(txPayload);
-      if (error) { setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]); triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`, 'warning'); } 
-      else { triggerSystemAlert(alertTitle, alertMsg, 'success'); refreshAllData(); }
+      if (error) {
+         setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
+         triggerSystemAlert("Saved Offline", `${alertMsg} (Network issue, will sync later)`, 'warning');
+      } else { 
+         triggerSystemAlert(alertTitle, alertMsg, 'success'); 
+         refreshAllData(); 
+      }
     } else {
-      setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]); triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`, 'warning');
+      setOfflineQueue(prev => [...prev, { id: Date.now(), payload: txPayload }]);
+      triggerSystemAlert("Saved Offline", `${alertMsg} (Will sync when connection restores)`, 'warning');
     }
   };
 
   const saveAdminNote = async (keyField, keyValue) => {
     if(!isOnline) { triggerSystemAlert("Error", "Internet required to save notes.", "error"); return; }
-    try { const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue); if (error) throw error; triggerSystemAlert("Note Saved", "Ledger updated.", "success"); await fetchLedgerData(); setOpenNoteId(null); } catch (error) { triggerSystemAlert("Failed", error.message, "error"); }
+    try {
+      const { error } = await supabase.from('transactions').update({ admin_note: tempNoteText }).eq(keyField, keyValue);
+      if (error) throw error; 
+      triggerSystemAlert("Note Saved", "Ledger updated.", "success");
+      await fetchLedgerData();
+      setOpenNoteId(null);
+    } catch (error) {
+      triggerSystemAlert("Failed", error.message, "error");
+    }
   };
 
   const executeDelete = async (type) => {
     if(!isOnline) { triggerSystemAlert("Error", "Internet required to delete records.", "error"); return; }
-    setIsProcessing(true); triggerHaptic([50, 50, 100]);
+    setIsProcessing(true);
+    triggerHaptic([50, 50, 100]);
+    
     try {
-        if (type === 'SOFT') { const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue); if (error) throw error; triggerSystemAlert("Voided", `Record ${deleteModal.keyValue} marked as deleted.`, "success"); } 
-        else { const { error } = await supabase.from('transactions').delete().eq(deleteModal.keyField, deleteModal.keyValue); if (error) throw error; triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success"); }
-        setDeleteModal(null); refreshAllData();
-    } catch(err) { triggerSystemAlert("Failed", err.message, "error"); } finally { setIsProcessing(false); }
+        if (type === 'SOFT') {
+          const { error } = await supabase.from('transactions').update({ status: 'DELETED' }).eq(deleteModal.keyField, deleteModal.keyValue);
+          if (error) throw error;
+          triggerSystemAlert("Voided", `Record ${deleteModal.keyValue} marked as deleted.`, "success");
+        } else {
+          const { error } = await supabase.from('transactions').delete().eq(deleteModal.keyField, deleteModal.keyValue);
+          if (error) throw error;
+          triggerSystemAlert("Wiped", `Record ${deleteModal.keyValue} permanently erased.`, "success");
+        }
+        setDeleteModal(null);
+        refreshAllData();
+    } catch(err) {
+        triggerSystemAlert("Failed", err.message, "error"); 
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const confirmMasterEdit = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required to edit records.", "error"); return; }
-    setIsProcessing(true); triggerHaptic([40, 40, 100]);
+    setIsProcessing(true); 
+    triggerHaptic([40, 40, 100]);
+
     try {
         for (const item of masterEditModal.items) {
           const newQty = parseInt(item.edit_qty) || 0;
-          if (newQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); } 
-          else {
-              const updatePayload = { item_desc: cleanDesc(item.item_desc), unit: getUnit(item.item_desc) };
+          
+          if (newQty <= 0) {
+              await supabase.from('transactions').delete().eq('id', item.id);
+          } else {
+              const updatePayload = { 
+                  item_desc: cleanDesc(item.item_desc),
+                  unit: getUnit(item.item_desc) 
+              };
               if (item.disp_qty !== null) updatePayload.disp_qty = newQty;
               if (item.req_qty !== null) updatePayload.req_qty = newQty;
+              
               await supabase.from('transactions').update(updatePayload).eq('id', item.id);
           }
         }
-        setMasterEditModal(null); triggerSystemAlert("Record Updated", `Successfully modified items.`, "success"); refreshAllData();
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        setMasterEditModal(null);
+        triggerSystemAlert("Record Updated", `Successfully modified items.`, "success");
+        refreshAllData();
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error"); 
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
-  const saveSettings = (e) => { e.preventDefault(); localStorage.setItem('god_emg_url', emergencyUrl); setSettingsModal(false); triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success"); };
-  const formatDate = (dateInput) => { const d = dateInput ? new Date(dateInput) : new Date(); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`; };
-  const formatTime = (dateInput) => { const d = dateInput ? new Date(dateInput) : new Date(); let hours = d.getHours(); let minutes = d.getMinutes(); const ampm = hours >= 12 ? 'PM' : 'AM'; hours = hours % 12 || 12; minutes = minutes < 10 ? '0' + minutes : minutes; return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`; };
-  const isWithin30Days = (dateStr) => { const txDate = new Date(dateStr); const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30); return txDate >= thirtyDaysAgo; };
+  const saveSettings = (e) => {
+      e.preventDefault();
+      localStorage.setItem('god_emg_url', emergencyUrl);
+      setSettingsModal(false);
+      triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success");
+  };
+
+  // ==========================================
+  // --- FORMATTERS & HELPERS ---
+  // ==========================================
+  const formatDate = (dateInput) => {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  };
+
+  const formatTime = (dateInput) => {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    let hours = d.getHours(); let minutes = d.getMinutes(); const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12; minutes = minutes < 10 ? '0' + minutes : minutes;
+    return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+  };
+
+  const isWithin30Days = (dateStr) => {
+    const txDate = new Date(dateStr);
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    return txDate >= thirtyDaysAgo;
+  };
 
   const getNextSequence = async (type) => {
     const prefix = type === 'PO' ? 'PO2627' : type === 'RT' ? 'RT2627' : type === 'RR' ? 'RR2627' : 'CN2627';
@@ -451,37 +631,115 @@ export default function App() {
       if (!isOnline) throw new Error("Offline");
       const { data, error } = await supabase.from('transactions').select(column).like(column, `${prefix}%`).order(column, { ascending: false }).limit(1);
       if (error) throw error;
-      if (data && data.length > 0 && data[0][column]) return `${prefix}${String(parseInt(String(data[0][column]).replace(prefix, '')) + 1).padStart(3, '0')}`;
+      if (data && data.length > 0 && data[0][column]) {
+          return `${prefix}${String(parseInt(String(data[0][column]).replace(prefix, '')) + 1).padStart(3, '0')}`;
+      }
       return `${prefix}001`;
-    } catch (e) { return getOfflineSequence(prefix === 'PO' ? 'PO' : prefix === 'RT' ? 'RT' : prefix === 'RR' ? 'RR' : 'M'); }
+    } catch (e) { 
+        return getOfflineSequence(prefix === 'PO' ? 'PO' : prefix === 'RT' ? 'RT' : prefix === 'RR' ? 'RR' : 'M'); 
+    }
   };
 
-  const getCategory = (desc) => { const normDesc = normalizeString(desc); const item = masterItems.find(i => normalizeString(i.description) === normDesc); if (item && item.category) return item.category; if (normDesc.includes('TYRE') || normDesc.includes('TUBE') || normDesc.match(/\d{2,3}\d{2,3}/)) return 'TVS'; return 'SERVO'; };
-  const getUnit = (desc) => { if (!desc) return 'NOS'; const normDesc = normalizeString(desc); let cat = getCategory(desc); if (cat === 'SERVO') { if (normDesc.includes('210L') || normDesc.includes('182KG')) return 'BRL'; if (normDesc.includes('50L')) return 'DRUM'; if (normDesc.includes('75L') || normDesc.includes('10L') || normDesc.includes('15L') || normDesc.includes('20L') || normDesc.includes('26L') || normDesc.includes('26KG')) return 'BUC'; return 'NOS'; } else { const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); if (learned[normDesc]) return learned[normDesc]; return normDesc.includes('TT') ? 'SET' : 'PCS'; } };
-  const getDisplayQty = (desc, qty, rawUnit) => { if (!desc) return `0 NOS`; let unit = rawUnit; if (!unit || String(unit).toUpperCase() === 'CANS') unit = 'NOS'; const normDesc = normalizeString(desc); const item = masterItems.find(i => normalizeString(i.description) === normDesc); const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : ''; if (item && item.category === 'SERVO' && item.ratio && !isNaN(parseFloat(item.ratio)) && parseFloat(item.ratio) > 1) { const ratio = parseFloat(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio; let parts = []; if (cases > 0) parts.push(`${cases} CAR`); if (cans > 0) parts.push(`${cans} ${unit}`); return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`; } return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`; };
+  const getCategory = (desc) => {
+    const normDesc = normalizeString(desc);
+    const item = masterItems.find(i => normalizeString(i.description) === normDesc); 
+    if (item && item.category) return item.category;
+    if (normDesc.includes('TYRE') || normDesc.includes('TUBE') || normDesc.match(/\d{2,3}\d{2,3}/)) return 'TVS';
+    return 'SERVO';
+  };
 
+  const getUnit = (desc) => {
+    if (!desc) return 'NOS'; 
+    const normDesc = normalizeString(desc);
+    let cat = getCategory(desc);
+    if (cat === 'SERVO') {
+      if (normDesc.includes('210L') || normDesc.includes('182KG')) return 'BRL';
+      if (normDesc.includes('50L')) return 'DRUM';
+      if (normDesc.includes('75L') || normDesc.includes('10L') || normDesc.includes('15L') || normDesc.includes('20L') || normDesc.includes('26L') || normDesc.includes('26KG')) return 'BUC';
+      return 'NOS';
+    } else {
+      const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+      if (learned[normDesc]) return learned[normDesc]; 
+      return normDesc.includes('TT') ? 'SET' : 'PCS';
+    }
+  };
+
+  const getDisplayQty = (desc, qty, rawUnit) => {
+    if (!desc) return `0 NOS`;
+    let unit = rawUnit;
+    if (!unit || String(unit).toUpperCase() === 'CANS') unit = 'NOS'; 
+    
+    const normDesc = normalizeString(desc);
+    const item = masterItems.find(i => normalizeString(i.description) === normDesc);
+    const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : '';
+    
+    if (item && item.category === 'SERVO' && item.ratio && !isNaN(parseFloat(item.ratio)) && parseFloat(item.ratio) > 1) {
+        const ratio = parseFloat(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio;
+        let parts = [];
+        if (cases > 0) parts.push(`${cases} CAR`);
+        if (cans > 0) parts.push(`${cans} ${unit}`);
+        return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`;
+    }
+    return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
+  };
+
+  // ==========================================
+  // --- PDF GENERATOR (PRE-PRINTED GRID) ---
+  // ==========================================
   const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); const isReturn = String(challanNo).startsWith('RT'); const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); let totalNos = 0;
+    const doc = new jsPDF({ format: 'a5' }); 
+    const isReturn = String(challanNo).startsWith('RT');
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
+    
+    let totalNos = 0;
     
     const drawPageHeaders = () => {
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
-        doc.setFontSize(9); doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // 1. MASTER OUTER BORDER (148x210mm A5 Page)
+        doc.rect(5, 5, 138, 195); 
+
+        // 2. HEADER
+        doc.setFillColor(235, 235, 235); 
+        doc.rect(5, 5, 138, 16, 'F'); 
+        doc.rect(5, 5, 138, 16); 
+        
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); 
+        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        
+        // 3. METADATA
+        doc.setFontSize(9);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
+        
+        // 4. TABLE HEADER
+        doc.setFillColor(245, 245, 245); 
+        doc.rect(5, 41, 138, 7, 'F'); 
+        doc.rect(5, 41, 138, 7); 
+        
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
+        doc.text("SR", 10, 46, { align: "center" }); 
+        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 115, 46, { align: "center" }); 
+        doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
     };
 
     const drawPageGrid = (endY) => {
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
-        doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
-        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // Vertical Grid Lines
+        doc.line(15, 48, 15, endY);   // SR
+        doc.line(105, 48, 105, endY); // Desc
+        doc.line(125, 48, 125, endY); // NOS
+        
+        // Bottom Closure Line
         doc.line(5, endY, 143, endY); 
     };
 
@@ -496,55 +754,135 @@ export default function App() {
         doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     };
 
-    drawPageHeaders(); let y = 53; const maxY = 165; 
+    drawPageHeaders();
+    let y = 53;
+    const maxY = 165; 
 
     itemsList.forEach((item, index) => {
-      const desc = String(item.description || item.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
-      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
-      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
+      const desc = String(item.description || item.item_desc || ''); 
+      const splitDesc = doc.splitTextToSize(desc, 85); 
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; 
+      totalNos += rawQty;
+      
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); 
+      const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
+      // Page Break Engine
       if (y + rowHeight > maxY) {
-          drawPageGrid(maxY); drawSignatures(maxY + 15);
-          doc.line(5, maxY, 5, maxY + 22); doc.line(143, maxY, 143, maxY + 22); doc.line(5, maxY + 22, 143, maxY + 22);
-          doc.addPage(); drawPageHeaders(); y = 53;
+          drawPageGrid(maxY);
+          drawSignatures(maxY + 15);
+          
+          doc.line(5, maxY, 5, maxY + 22);
+          doc.line(143, maxY, 143, maxY + 22);
+          doc.line(5, maxY + 22, 143, maxY + 22);
+
+          doc.addPage();
+          drawPageHeaders();
+          y = 53;
       }
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" }); doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      if (index < itemsList.length - 1 && y + rowHeight < maxY) { doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); }
+
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
+      doc.text(splitDesc, 17, y); 
+      doc.setFont("helvetica", "bold"); 
+      doc.text(paddedQty, 115, y, { align: "center" }); 
+      doc.setFontSize(8); 
+      doc.text(displayStr, 134, y, { align: "center" });
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
+        doc.setLineWidth(0.1); 
+        doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
+        doc.setDrawColor(0, 0, 0); 
+      }
       y += rowHeight + 2; 
     });
 
+    // 9. LAST PAGE CLOSURE & TOTAL BOX
     drawPageGrid(y);
-    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
-    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
-    const sigY = y + 20; drawSignatures(sigY);
-    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
+    doc.setFillColor(235, 235, 235); 
+    doc.rect(5, y, 100, 7, 'F'); 
+    doc.rect(105, y, 38, 7, 'F'); 
+    doc.rect(5, y, 138, 7, 'S'); 
+    doc.line(105, y, 105, y + 7); 
+
+    doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    
+    // 10. SIGNATURES & PAGINATION
+    const sigY = y + 20;
+    drawSignatures(sigY);
+
+    doc.line(5, y + 7, 5, sigY + 7);
+    doc.line(143, y + 7, 143, sigY + 7);
+    doc.line(5, sigY + 7, 143, sigY + 7);
+
     const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" }); }
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+    }
+
     doc.save(`${challanNo}.pdf`);
   };
 
+  // ==========================================
+  // --- EXCEL EXPORTER ---
+  // ==========================================
   const handleFileUpload = async (event) => {
-    const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...'); const reader = new FileReader();
+    const file = event.target.files[0]; 
+    if (!file) return; 
+    setUploadStatus('Processing...');
+    
+    const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const data = new Uint8Array(e.target.result); const workbook = XLSX.read(data, { type: 'array' }); let finalItemsToUpload = [];
-        const normalizeRow = (row) => { const normalized = {}; for (let key in row) normalized[String(key).toLowerCase().trim()] = row[key]; return normalized; };
+        const data = new Uint8Array(e.target.result); 
+        const workbook = XLSX.read(data, { type: 'array' }); 
+        let finalItemsToUpload = [];
+        
+        const normalizeRow = (row) => { 
+            const normalized = {}; 
+            for (let key in row) normalized[String(key).toLowerCase().trim()] = row[key]; 
+            return normalized; 
+        };
+        
         ['SERVO', 'TVS'].forEach(sheetName => {
           const sheet = workbook.SheetNames.find(s => String(s).toUpperCase() === sheetName);
           if (sheet) {
-            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => { const norm = normalizeRow(row); return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null }; }).filter(item => item.description);
+            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
+              const norm = normalizeRow(row); 
+              return { 
+                  description: cleanDesc(norm.description), 
+                  ratio: parseFloat(norm.ratio) || 1, 
+                  category: sheetName, 
+                  sku: norm.sku || norm.code || norm.shortname || null 
+              };
+            }).filter(item => item.description);
             finalItemsToUpload = [...finalItemsToUpload, ...formatted];
           }
         });
-        await supabase.from('master_items').delete().neq('description', 'dummy'); await supabase.from('master_items').insert(finalItemsToUpload); refreshAllData();
-      } catch (error) { setUploadStatus(`Error`); }
-    }; reader.readAsArrayBuffer(file); 
+        
+        await supabase.from('master_items').delete().neq('description', 'dummy'); 
+        await supabase.from('master_items').insert(finalItemsToUpload);
+        refreshAllData();
+      } catch (error) { 
+          setUploadStatus(`Error`); 
+      }
+    };
+    reader.readAsArrayBuffer(file); 
   };
 
   const downloadLedger = () => {
     if(ledgerData.length === 0) { alert(`No data to export.`); return; }
-    const dispatchedDataObj = {}; const returnsDataObj = {};
+    
+    const dispatchedDataObj = {}; 
+    const returnsDataObj = {};
+    
     ledgerData.forEach(row => {
       const key = String(row.challan_no || row.group_id || 'UNKNOWN');
       if (row.status === 'RETURN_ACCEPTED') {
@@ -557,191 +895,709 @@ export default function App() {
       }
     });
 
-    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date)); const returnGroups = Object.values(returnsDataObj); const itemSummary = {};
+    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
+    const returnGroups = Object.values(returnsDataObj);
+    const itemSummary = {};
+    
     ledgerData.forEach(row => {
-      const desc = cleanDesc(row.item_desc); const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      const desc = cleanDesc(row.item_desc); 
+      const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      
       if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
-      if (row.status !== 'DELETED') { if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q; }
+      
+      if (row.status !== 'DELETED') {
+        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
+        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      }
     });
 
-    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO'); const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
-    let htmlArray = []; htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`); htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
-    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => { let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`; st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`; if (isNum) st += `mso-number-format:'\\@';`; return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`; };
+    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
+    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
+    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
 
-    let leftRows = [], rightRows = [];
-    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6)); leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
-    leftRows.push(cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE'));
+    let htmlArray = [];
+    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
+    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
+
+    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
+        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
+        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
+        if (isNum) st += `mso-number-format:'\\@';`;
+        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
+    };
+
+    let leftRows = [];
+    let rightRows = [];
+    
+    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
+    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
+    leftRows.push(
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
+        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
+    );
 
     let gTotal = 0;
     dispatchedGroups.forEach(g => {
-        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe"; let tc = g.status === "DELETED" ? "#9ca3af" : "#000"; let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
+        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
+        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
+        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
+        
         g.items.forEach((r, i) => {
-            let rq = parseInt(r.disp_qty || r.req_qty) || 0; if (g.status !== 'DELETED') gTotal += rq; let rowHtml = "";
-            if (i === 0) { rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length); rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length); }
-            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc)); rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0')); rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc))).toUpperCase());
-            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, String(g.admin_note || ''), g.items.length); leftRows.push(rowHtml);
+            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
+            if (g.status !== 'DELETED') gTotal += rq;
+            let rowHtml = "";
+            if (i === 0) {
+                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
+                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
+            }
+            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc))).toUpperCase());
+            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, String(g.admin_note || ''), g.items.length);
+            leftRows.push(rowHtml);
         });
     });
+    
     leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
 
-    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3)); rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3)); rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
+    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
+    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
+    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
     
     if (servoEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3)); let sTot = 0;
-        servoEntries.forEach(([d, v]) => { sTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); });
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
+        let sTot = 0;
+        servoEntries.forEach(([d, v]) => { 
+            sTot += v.qty; 
+            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
+        });
         rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
     }
+    
     if (tvsEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3)); let tTot = 0;
-        tvsEntries.forEach(([d, v]) => { tTot += v.qty; rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); });
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
+        let tTot = 0;
+        tvsEntries.forEach(([d, v]) => { 
+            tTot += v.qty; 
+            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
+        });
         rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
     }
 
     const maxRows = Math.max(leftRows.length, rightRows.length);
-    for(let i=0; i<maxRows; i++) { htmlArray.push(`<tr style="height:35px;">`); htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`); htmlArray.push(`<td style="border:none;width:30px;"></td>`); htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`); htmlArray.push(`</tr>`); }
+    for(let i=0; i<maxRows; i++) {
+        htmlArray.push(`<tr style="height:35px;">`);
+        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
+        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
+        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
+        htmlArray.push(`</tr>`);
+    }
     htmlArray.push(`</table></body></html>`);
 
-    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); 
+    a.href = url; 
+    a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    document.body.appendChild(a); 
+    a.click(); 
+    document.body.removeChild(a);
+  };
+  // ==========================================
+  // --- PDF GENERATOR (PRE-PRINTED GRID) ---
+  // ==========================================
+  const printPDF = (challanNo, itemsList) => {
+    const doc = new jsPDF({ format: 'a5' }); 
+    const isReturn = String(challanNo).startsWith('RT');
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
+    
+    let totalNos = 0;
+    
+    const drawPageHeaders = () => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // Master Outer Border (148x210mm A5 Page)
+        doc.rect(5, 5, 138, 195); 
+
+        // Header
+        doc.setFillColor(235, 235, 235); 
+        doc.rect(5, 5, 138, 16, 'F'); 
+        doc.rect(5, 5, 138, 16); 
+        
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); 
+        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        
+        // Metadata
+        doc.setFontSize(9);
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
+        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        
+        // Table Header
+        doc.setFillColor(245, 245, 245); 
+        doc.rect(5, 41, 138, 7, 'F'); 
+        doc.rect(5, 41, 138, 7); 
+        
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+        doc.text("SR", 10, 46, { align: "center" }); 
+        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 115, 46, { align: "center" }); 
+        doc.text("QTY", 134, 46, { align: "center" });
+        doc.setFont("helvetica", "normal");
+    };
+
+    const drawPageGrid = (endY) => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // Vertical Grid Lines
+        doc.line(15, 48, 15, endY);   // SR
+        doc.line(105, 48, 105, endY); // Desc
+        doc.line(125, 48, 125, endY); // NOS
+        
+        // Bottom Closure Line
+        doc.line(5, endY, 143, endY); 
+    };
+
+    const drawSignatures = (sigY) => {
+        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
+        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
+          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
+          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
+        }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
+        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
+    };
+
+    drawPageHeaders();
+    let y = 53;
+    const maxY = 165; 
+
+    itemsList.forEach((item, index) => {
+      const desc = String(item.description || item.item_desc || ''); 
+      const splitDesc = doc.splitTextToSize(desc, 85); 
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; 
+      totalNos += rawQty;
+      
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); 
+      const paddedQty = String(rawQty).padStart(2, '0');
+      const rowHeight = (splitDesc.length * 4) + 1;
+      
+      // Page Break Engine
+      if (y + rowHeight > maxY) {
+          drawPageGrid(maxY);
+          drawSignatures(maxY + 15);
+          
+          doc.line(5, maxY, 5, maxY + 22);
+          doc.line(143, maxY, 143, maxY + 22);
+          doc.line(5, maxY + 22, 143, maxY + 22);
+
+          doc.addPage();
+          drawPageHeaders();
+          y = 53;
+      }
+
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
+      doc.text(splitDesc, 17, y); 
+      doc.setFont("helvetica", "bold"); 
+      doc.text(paddedQty, 115, y, { align: "center" }); 
+      doc.setFontSize(8); 
+      doc.text(displayStr, 134, y, { align: "center" });
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
+        doc.setLineWidth(0.1); 
+        doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
+        doc.setDrawColor(0, 0, 0); 
+      }
+      y += rowHeight + 2; 
+    });
+
+    // LAST PAGE CLOSURE & TOTAL BOX
+    drawPageGrid(y);
+    doc.setFillColor(235, 235, 235); 
+    doc.rect(5, y, 100, 7, 'F'); 
+    doc.rect(105, y, 38, 7, 'F'); 
+    doc.rect(5, y, 138, 7, 'S'); 
+    doc.line(105, y, 105, y + 7); 
+
+    doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    
+    // SIGNATURES & PAGINATION
+    const sigY = y + 20;
+    drawSignatures(sigY);
+
+    doc.line(5, y + 7, 5, sigY + 7);
+    doc.line(143, y + 7, 143, sigY + 7);
+    doc.line(5, sigY + 7, 143, sigY + 7);
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+    }
+
+    doc.save(`${challanNo}.pdf`);
   };
 
-  const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
-    setItemState(item); setSearchState(item.description); let newUnit = getUnit(item.description); setUnitState(newUnit);
-    if (item.category === 'TVS') { const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits)); }
-    setHighlightIndex(-1); if(setDropdownState) setDropdownState(false);
-    if (searchQueryStr && String(searchQueryStr).length >= 2) { const sq = normalizeString(searchQueryStr); if (sq !== normalizeString(item.description) && (!item.sku || sq !== normalizeString(item.sku))) { const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}'); aliases[sq] = item.description; localStorage.setItem('god_aliases', JSON.stringify(aliases)); } }
-    triggerHaptic(30); const isDesktop = window.innerWidth > 768; if (isDesktop) setTimeout(() => focusRef?.current?.focus(), 50);
+  // ==========================================
+  // --- EXCEL EXPORTER ---
+  // ==========================================
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0]; 
+    if (!file) return; 
+    setUploadStatus('Processing...');
+    
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target.result); 
+        const workbook = XLSX.read(data, { type: 'array' }); 
+        let finalItemsToUpload = [];
+        
+        const normalizeRow = (row) => { 
+            const normalized = {}; 
+            for (let key in row) normalized[String(key).toLowerCase().trim()] = row[key]; 
+            return normalized; 
+        };
+        
+        ['SERVO', 'TVS'].forEach(sheetName => {
+          const sheet = workbook.SheetNames.find(s => String(s).toUpperCase() === sheetName);
+          if (sheet) {
+            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
+              const norm = normalizeRow(row); 
+              return { 
+                  description: cleanDesc(norm.description), 
+                  ratio: parseFloat(norm.ratio) || 1, 
+                  category: sheetName, 
+                  sku: norm.sku || norm.code || norm.shortname || null 
+              };
+            }).filter(item => item.description);
+            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
+          }
+        });
+        
+        await supabase.from('master_items').delete().neq('description', 'dummy'); 
+        await supabase.from('master_items').insert(finalItemsToUpload);
+        refreshAllData();
+      } catch (error) { 
+          setUploadStatus(`Error`); 
+      }
+    };
+    reader.readAsArrayBuffer(file); 
   };
 
-  const handleKeyDown = (e, itemsList, setSelected, setSearch, setDropdownOpen, setUnitState, listIdPrefix, focusRef, currentSelectedItem) => {
-    if (e.key === 'Delete') { e.preventDefault(); triggerHaptic(30); setSelected(null); setSearch(''); setUnitState('NOS'); if (setDropdownOpen) setDropdownOpen(false); return; }
-    if (e.key === 'Backspace' && currentSelectedItem) { e.preventDefault(); triggerHaptic(30); setSelected(null); setSearch(''); setUnitState('NOS'); if (setDropdownOpen) setDropdownOpen(false); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIndex(p => { const next = p < itemsList.length - 1 ? p + 1 : p; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); } 
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIndex(p => { const next = p > 0 ? p - 1 : 0; document.getElementById(`${listIdPrefix}-${next}`)?.scrollIntoView({ block: 'nearest' }); return next; }); } 
-    else if (e.key === 'Enter') { e.preventDefault(); if (highlightIndex >= 0 && itemsList[highlightIndex]) { handleItemSelect(itemsList[highlightIndex], setSelected, setUnitState, setSearch, setDropdownOpen, e.target.value, focusRef); } } 
-    else if (e.key === 'Tab' || e.key === 'Escape') { if (setDropdownOpen) setDropdownOpen(false); }
+  const downloadLedger = () => {
+    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
+    
+    const dispatchedDataObj = {}; 
+    const returnsDataObj = {};
+    
+    ledgerData.forEach(row => {
+      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
+      if (row.status === 'RETURN_ACCEPTED') {
+         if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
+         returnsDataObj['RETURNS'].items.push(row);
+      } else {
+         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
+         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
+         dispatchedDataObj[key].items.push(row);
+      }
+    });
+
+    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
+    const returnGroups = Object.values(returnsDataObj);
+    const itemSummary = {};
+    
+    ledgerData.forEach(row => {
+      const desc = cleanDesc(row.item_desc); 
+      const q = parseInt(row.disp_qty || row.req_qty) || 0;
+      
+      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
+      
+      if (row.status !== 'DELETED') {
+        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
+        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
+      }
+    });
+
+    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
+    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
+    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
+
+    let htmlArray = [];
+    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
+    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
+
+    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
+        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
+        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
+        if (isNum) st += `mso-number-format:'\\@';`;
+        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
+    };
+
+    let leftRows = [];
+    let rightRows = [];
+    
+    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
+    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
+    leftRows.push(
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
+        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
+        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
+    );
+
+    let gTotal = 0;
+    dispatchedGroups.forEach(g => {
+        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
+        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
+        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
+        
+        g.items.forEach((r, i) => {
+            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
+            if (g.status !== 'DELETED') gTotal += rq;
+            let rowHtml = "";
+            if (i === 0) {
+                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
+                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
+            }
+            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
+            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc))).toUpperCase());
+            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, String(g.admin_note || ''), g.items.length);
+            leftRows.push(rowHtml);
+        });
+    });
+    
+    leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
+
+    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
+    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
+    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
+    
+    if (servoEntries.length > 0) {
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
+        let sTot = 0;
+        servoEntries.forEach(([d, v]) => { 
+            sTot += v.qty; 
+            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
+        });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
+    }
+    
+    if (tvsEntries.length > 0) {
+        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
+        let tTot = 0;
+        tvsEntries.forEach(([d, v]) => { 
+            tTot += v.qty; 
+            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
+        });
+        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
+    }
+
+    const maxRows = Math.max(leftRows.length, rightRows.length);
+    for(let i=0; i<maxRows; i++) {
+        htmlArray.push(`<tr style="height:35px;">`);
+        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
+        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
+        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
+        htmlArray.push(`</tr>`);
+    }
+    htmlArray.push(`</table></body></html>`);
+
+    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); 
+    a.href = url; 
+    a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
+    document.body.appendChild(a); 
+    a.click(); 
+    document.body.removeChild(a);
   };
 
-  const toggleGroupExpand = (groupId) => { setExpandedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] })); };
+  // ==========================================
+  // --- ACTIONS (CART & MODALS) ---
+  // ==========================================
 
-  // --- ACTIONS (RETAIL) ---
-  const retailFilteredItems = smartSearch(retailSearch);
   const addToRetailCart = (e) => {
-    if (e) e.preventDefault(); if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return; triggerHaptic(40);
-    let finalQty = parseInt(retailQty); if (finalQty < 0) { setRetailMode('RETURN'); finalQty = Math.abs(finalQty); }
-    setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]); setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null); const isDesktop = window.innerWidth > 768; if (isDesktop) setTimeout(() => retailSearchRef.current?.focus(), 50); 
+    if (e) e.preventDefault();
+    if (!retailSelectedItem || !retailQty || parseInt(retailQty) === 0) return;
+    
+    triggerHaptic(40);
+    let finalQty = parseInt(retailQty);
+    if (finalQty < 0) {
+        setRetailMode('RETURN');
+        finalQty = Math.abs(finalQty);
+    }
+
+    setRetailCart([...retailCart, { ...retailSelectedItem, req_qty: finalQty, unit: retailSelectedUnit }]);
+    setRetailSearch(''); setRetailQty(''); setRetailSelectedItem(null);
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) setTimeout(() => retailSearchRef.current?.focus(), 50); 
   };
+  
   const updateRetailCartQty = (index, val) => { const updated = [...retailCart]; updated[index] = { ...updated[index], req_qty: val }; setRetailCart(updated); };
   const removeRetailCartItem = (index) => setRetailCart(retailCart.filter((_, i) => i !== index));
 
   const submitRetailAction = async (e) => {
-    if (e) e.preventDefault(); if (retailCart.length === 0 || isProcessing) return; triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    if (e) e.preventDefault();
+    if (retailCart.length === 0 || isProcessing) return; 
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
         const isReturn = retailMode === 'RETURN'; const groupId = await getNextSequence(isReturn ? 'RT' : 'PO');
-        const tx = retailCart.map(item => ({ group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED', challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null }));
-        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => { setRetailCart([]); setRetailReturnNote(''); });
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        const tx = retailCart.map(item => ({ 
+          group_id: groupId, item_desc: item.description, req_qty: parseInt(item.req_qty), 
+          unit: item.unit, status: isReturn ? 'RETURN_INITIATED' : 'PO_PLACED',
+          challan_no: isReturn ? groupId : null, note: isReturn ? (retailReturnNote || null) : null
+        }));
+        
+        await executeTransaction(tx, `${isReturn ? 'Return' : 'P.O.'} Submitted`, `Group ID: ${groupId}`, () => {
+          setRetailCart([]); setRetailReturnNote('');
+        });
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
-  // --- ACTIONS (DEPOT) ---
-  const depotFilteredItems = smartSearch(searchQuery);
   const addToDepotCart = (e) => {
-    if (e) e.preventDefault(); if (!selectedItem || !qty || parseInt(qty) === 0) return; triggerHaptic(40);
-    let finalQty = parseInt(qty); if (finalQty < 0) { setDepotMode('RETURN_REQUEST'); finalQty = Math.abs(finalQty); }
-    setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); setSearchQuery(''); setQty(''); setSelectedItem(null); const isDesktop = window.innerWidth > 768; if (isDesktop) setTimeout(() => depotSearchRef.current?.focus(), 50); 
+    if (e) e.preventDefault();
+    if (!selectedItem || !qty || parseInt(qty) === 0) return;
+    
+    triggerHaptic(40);
+    let finalQty = parseInt(qty);
+    if (finalQty < 0) {
+        setDepotMode('RETURN_REQUEST');
+        finalQty = Math.abs(finalQty);
+    }
+
+    setDepotCart([...depotCart, { ...selectedItem, disp_qty: finalQty, unit: selectedUnit }]); 
+    setSearchQuery(''); setQty(''); setSelectedItem(null);
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) setTimeout(() => depotSearchRef.current?.focus(), 50); 
   };
+
   const updateDepotCartQty = (index, val) => { const updated = [...depotCart]; updated[index] = { ...updated[index], disp_qty: val }; setDepotCart(updated); };
   const removeDepotCartItem = (index) => setDepotCart(depotCart.filter((_, i) => i !== index));
 
   const submitDepotAction = async (e) => {
-    e.preventDefault(); if (depotCart.length === 0 || isProcessing) return; triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    e.preventDefault(); 
+    if (depotCart.length === 0 || isProcessing) return;
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+
     try {
         if (depotMode === 'DISPATCH') {
           const challanNo = await getNextSequence('CN'); const groupId = getOfflineSequence('M');
           const tx = depotCart.map(item => ({ group_id: groupId, challan_no: challanNo, item_desc: item.description, disp_qty: parseInt(item.disp_qty), unit: item.unit, status: 'DISPATCHED' }));
-          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => { printPDF(challanNo, depotCart); setDepotCart([]); });
+          await executeTransaction(tx, "Challan Issued", `Challan: ${challanNo}`, () => {
+            printPDF(challanNo, depotCart); setDepotCart([]); 
+          });
         } else {
           const groupId = await getNextSequence('RR');
-          const tx = depotCart.map(item => ({ group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null }));
-          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => { setDepotCart([]); setDepotReturnNote(''); });
+          const tx = depotCart.map(item => ({ 
+            group_id: groupId, item_desc: item.description, req_qty: parseInt(item.disp_qty), 
+            unit: item.unit, status: 'RETURN_REQUESTED', note: depotReturnNote || null 
+          }));
+          await executeTransaction(tx, "Return Request Submitted", `Group ID: ${groupId}`, () => {
+            setDepotCart([]); setDepotReturnNote('');
+          });
         }
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
-  // --- ACTIONS (MODALS & AWAIT LOOPS) ---
   const openVerifyModal = (challanNo, items) => {
-    triggerHaptic(30); const checks = {}; items.forEach((_, i) => checks[i] = false);
+    triggerHaptic(30);
+    const checks = {}; items.forEach((_, i) => checks[i] = false);
     const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
-    setVerifyModal({ challanNo, items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), checks, isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false });
+    setVerifyModal({ 
+      challanNo, 
+      items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), 
+      checks, 
+      isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false
+    });
   };
-  const toggleVerifyCheck = (index) => { triggerHaptic(20); setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } })); };
+
+  const toggleVerifyCheck = (index) => {
+      triggerHaptic(20);
+      setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } }));
+  };
 
   const acceptDelivery = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
     if (!verifyModal || isProcessing) return; 
+
+    // FIX: Requires at least one item using .some()
     const checkedIndexes = Object.keys(verifyModal.checks).filter(k => verifyModal.checks[k]);
-    if (checkedIndexes.length === 0) { triggerSystemAlert("Action Required", "Please check off at least one item.", "warning"); return; }
-    triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    if (checkedIndexes.length === 0) {
+        triggerSystemAlert("Action Required", "Please check off at least one item to verify.", "warning");
+        return;
+    }
+
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
         const newStatus = verifyModal.isDepotReturn ? 'RETURN_ACCEPTED' : 'ACCEPTED';
         for (let i = 0; i < checkedIndexes.length; i++) {
-            const index = checkedIndexes[i]; const item = verifyModal.items[index]; const finalQty = parseInt(item.edit_qty) || 0;
+            const index = checkedIndexes[i];
+            const item = verifyModal.items[index];
+            const finalQty = parseInt(item.edit_qty) || 0;
             await supabase.from('transactions').update({ status: newStatus, disp_qty: finalQty, req_qty: finalQty }).eq('id', item.id);
         }
-        setVerifyModal(null); refreshAllData(); triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
-    } catch (err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        setVerifyModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Accepted", `Items from ${verifyModal.challanNo} verified.`, "success");
+    } catch (err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
-  const openEditPOModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || ''))); setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
-  const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
+  const openEditPOModal = (groupId, items) => { 
+      triggerHaptic(30);
+      const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+      setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+  };
+  
+  const handleEditPOQty = (index, val) => { 
+      const updated = [...editPOModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setEditPOModal({ ...editPOModal, items: updated }); 
+  };
   
   const confirmDispatchPO = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
-    if (!editPOModal || isProcessing) return; triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    if (!editPOModal || isProcessing) return; 
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
-        const challanNo = await getNextSequence('CN'); const backorders = []; const printItems = []; let newPO = null;
+        const challanNo = await getNextSequence('CN'); 
+        const backorders = []; 
+        const printItems = [];
+        let newPO = null;
+
         for (const item of editPOModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
-          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
+
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').delete().eq('id', item.id); 
+              continue; 
+          }
+          
           await supabase.from('transactions').update({ status: 'DISPATCHED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
+          
           if (dispatchQty < reqQty) { 
               if (!newPO) newPO = await getNextSequence('PO');
               backorders.push({ group_id: newPO, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'PO_PLACED' }); 
           }
         }
+
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        setEditPOModal(null); refreshAllData(); triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        
+        setEditPOModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Success", `Challan ${challanNo} Dispatched.`, "success");
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
-  const openProcessReturnModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || ''))); setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
-  const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
+  const openProcessReturnModal = (groupId, items) => { 
+      triggerHaptic(30);
+      const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+      setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); 
+  };
+  
+  const handleProcessReturnQty = (index, val) => { 
+      const updated = [...processReturnModal.items]; 
+      updated[index] = { ...updated[index], edit_qty: val }; 
+      setProcessReturnModal({ ...processReturnModal, items: updated }); 
+  };
 
   const confirmProcessReturnRequest = async () => {
     if (!isOnline) { triggerSystemAlert("Error", "Internet required.", "error"); return; }
-    if (!processReturnModal || isProcessing) return; triggerHaptic([40, 40, 100]); setIsProcessing(true);
+    if (!processReturnModal || isProcessing) return; 
+    
+    triggerHaptic([40, 40, 100]);
+    setIsProcessing(true);
+    
     try {
-        const challanNo = await getNextSequence('RT'); const backorders = []; const printItems = []; let newRR = null;
+        const challanNo = await getNextSequence('RT'); 
+        const backorders = []; 
+        const printItems = [];
+        let newRR = null;
+
         for (const item of processReturnModal.items) {
-          const dispatchQty = parseInt(item.edit_qty) || 0; const reqQty = parseInt(item.req_qty) || 0;
-          if (dispatchQty <= 0) { await supabase.from('transactions').delete().eq('id', item.id); continue; }
+          const dispatchQty = parseInt(item.edit_qty) || 0; 
+          const reqQty = parseInt(item.req_qty) || 0;
+
+          if (dispatchQty <= 0) { 
+              await supabase.from('transactions').delete().eq('id', item.id); 
+              continue; 
+          }
+
           await supabase.from('transactions').update({ status: 'RETURN_INITIATED', challan_no: challanNo, disp_qty: dispatchQty }).eq('id', item.id); 
           printItems.push({ ...item, disp_qty: dispatchQty }); 
+          
           if (dispatchQty < reqQty) { 
               if (!newRR) newRR = await getNextSequence('RR');
               backorders.push({ group_id: newRR, item_desc: item.item_desc, req_qty: reqQty - dispatchQty, unit: item.unit, status: 'RETURN_REQUESTED' }); 
           }
         }
+
         if (backorders.length > 0) await supabase.from('transactions').insert(backorders);
         if (printItems.length > 0) printPDF(challanNo, printItems);
-        setProcessReturnModal(null); refreshAllData(); triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
-    } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
+        
+        setProcessReturnModal(null); 
+        refreshAllData();
+        triggerSystemAlert("Success", `Return ${challanNo} Generated.`, "success");
+    } catch(err) {
+        triggerSystemAlert("Error", err.message, "error");
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   // ==========================================
   // --- UI RENDERING ---
   // ==========================================
+  
+  // INITIALIZATION
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
@@ -751,6 +1607,7 @@ export default function App() {
     </div>
   );
 
+  // BLANK SCREEN / TIMEOUT RECOVERY
   if (session && view === '') return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-yellow-100 border-2 border-yellow-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -761,6 +1618,7 @@ export default function App() {
     </div>
   );
   
+  // LOGIN SCREEN
   if (!session) return (
     <div className="flex items-center justify-center min-h-screen bg-gray-200 font-sans select-none">
       <div className="bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-sm w-full relative">
@@ -831,32 +1689,39 @@ export default function App() {
         </div>
       )}
 
-      {/* MASTER EDIT MODAL */}
+      {/* --- MASTER EDIT MODAL (MOBILE RESPONSIVE FIX) --- */}
       {masterEditModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
-                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
+              
+              <div className="space-y-3 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
+                <div className="hidden sm:flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
+                
                 {masterEditModal.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
+                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-gray-100 border border-gray-300 p-3 rounded">
                     <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
                         const updated = [...masterEditModal.items]; 
                         updated[idx] = { ...updated[idx], item_desc: e.target.value }; 
                         setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="flex-1 min-w-0 text-[11px] md:text-[13px] p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
-                    <input type="number" value={item.edit_qty} onChange={(e) => {
-                        const updated = [...masterEditModal.items]; 
-                        updated[idx] = { ...updated[idx], edit_qty: e.target.value }; 
-                        setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    }} className="w-full sm:flex-1 text-[13px] md:text-sm p-2 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
+                    
+                    <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto mt-1 sm:mt-0">
+                       <span className="text-[11px] font-bold text-gray-500 uppercase sm:hidden">Quantity:</span>
+                       <input type="number" value={item.edit_qty} onChange={(e) => {
+                          const updated = [...masterEditModal.items]; 
+                          updated[idx] = { ...updated[idx], edit_qty: e.target.value }; 
+                          setMasterEditModal({...masterEditModal, items: updated});
+                       }} className="w-24 text-[13px] md:text-sm p-2 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    </div>
                   </div>
                 ))}
                 <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m.description} />)}</datalist>
               </div>
+              
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
-                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
+                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
+                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
               </div>
             </div>
         </div>
@@ -867,23 +1732,23 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                 <h2 className="text-lg font-bold border-b-2 border-black pb-2 mb-4 uppercase text-blue-800">VERIFY GOODS: {verifyModal.challanNo}</h2>
-                <div className="space-y-2 mb-4 max-h-72 overflow-y-auto pr-2">
+                <div className="space-y-2 mb-4 max-h-[60vh] overflow-y-auto pr-2">
                   <div className="flex text-[11px] font-bold text-gray-500 px-2 uppercase"><span className="w-8 text-center">CHK</span><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 md:w-24 text-center">RCVD QTY</span></div>
                   {verifyModal.items.map((item, idx) => (
                     <label key={idx} className={`flex items-center space-x-2 md:space-x-3 p-2 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
                       <div className="w-8 flex justify-center">
-                          <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600" />
+                          <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-6 h-6 cursor-pointer accent-blue-600" />
                       </div>
-                      <span className="flex-1 text-[11px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                      <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
                       <input type="number" value={item.edit_qty} onClick={(e) => e.stopPropagation()} onChange={(e) => {
                               const updated = [...verifyModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setVerifyModal({ ...verifyModal, items: updated });
-                          }} className="w-16 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
+                          }} className="w-20 md:w-24 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                     </label>
                   ))}
                 </div>
                 <div className="flex space-x-3">
-                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
-                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
+                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
+                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
                 </div>
             </div>
         </div>
@@ -894,19 +1759,19 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
+                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
               </div>
             </div>
         </div>
@@ -917,64 +1782,70 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center gap-2 bg-red-50 border border-red-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
+                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
               </div>
             </div>
         </div>
       )}
 
-      {/* SINGLE LINE NAVIGATION BAR */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-2.5 md:p-3 sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto flex flex-row justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm">
-          <div className="flex items-center gap-1 md:gap-2">
-            <span className="tracking-widest hidden sm:inline">Gujarat Oil Depot</span>
-            <span className="tracking-widest sm:hidden text-xs">GOD</span>
-            <button onClick={() => {
-                triggerHaptic(50);
-                if (emergencyUrl) window.open(emergencyUrl, '_blank');
-                else alert("Emergency URL not set. Please ask Master user to configure it in Settings.");
-            }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
-            {actionableCount > 0 && (
-              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span>
-              </span>
-            )}
-            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+      {/* --- RESPONSIVE MOBILE NAVBAR FIX --- */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex flex-col sm:flex-row justify-between items-center gap-3 w-full font-bold uppercase">
+          
+          <div className="flex items-center justify-between w-full sm:w-auto">
+            <div className="flex items-center gap-2">
+              <span className="tracking-widest text-base">GOD</span>
+              <button onClick={() => {
+                  triggerHaptic(50);
+                  if (emergencyUrl) window.open(emergencyUrl, '_blank');
+                  else alert("Emergency URL not set. Ask Master to configure Settings.");
+              }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+              {actionableCount > 0 && (
+                <span className="relative flex h-3 w-3 -ml-1 -mt-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                </span>
+              )}
+              {!isOnline && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            </div>
+
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="text-gray-400 hover:text-white transition-colors text-xl sm:ml-4" title="System Settings">⚙️</button>
             )}
           </div>
-          <div className="flex flex-row gap-1 md:gap-2 items-center">
+          
+          <div className="flex flex-row gap-2 items-center w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 hide-scrollbar whitespace-nowrap">
             {userRole && (
-              <div className="p-0.5 md:p-1 flex flex-row gap-0.5 md:gap-1 rounded bg-gray-700">
+              <div className="p-1 flex flex-row gap-1 rounded bg-gray-700 flex-nowrap">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[8px] md:text-xs border border-black hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-2.5 text-xs sm:text-sm font-bold border border-black rounded shadow-sm hover:bg-red-700 transition-colors ml-auto sm:ml-2">LOGOUT</button>
           </div>
         </div>
       </nav>
 
       <main className="container mx-auto p-3 md:p-4">
+        
+        {/* ================= VIEWS ================= */}
         {view === 'unassigned' && (
           <div className="flex items-center justify-center mt-20">
             <div className="bg-red-100 border-2 border-red-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
@@ -995,6 +1866,7 @@ export default function App() {
                   </label>
                 )}
               </div>
+              
               <div className="flex items-center gap-2">
                 <span className="text-[11px] md:text-[13px] font-bold uppercase mr-1">Ledger Month:</span>
                 <select value={ledgerMonth} onChange={(e) => setLedgerMonth(Number(e.target.value))} className="border-2 border-black p-1 md:p-1.5 text-[13px] md:text-sm font-bold uppercase focus:outline-none cursor-pointer select-text">
@@ -1040,6 +1912,7 @@ export default function App() {
                     }, {}))
                     .sort((a, b) => String(b.keyValue).localeCompare(String(a.keyValue))) 
                     .map((group, idx) => {
+                      
                       const sortedItems = [...group.items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
