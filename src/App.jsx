@@ -18,28 +18,32 @@ const initAudio = () => {
 };
 
 const playChime = () => {
-  try {
-    if (!globalAudioCtx) return;
-    const osc = globalAudioCtx.createOscillator();
-    const gainNode = globalAudioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
-    osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.3); 
-    gainNode.gain.setValueAtTime(0.3, globalAudioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.5);
-    osc.connect(gainNode);
-    gainNode.connect(globalAudioCtx.destination);
-    osc.start();
-    osc.stop(globalAudioCtx.currentTime + 0.5);
-  } catch (e) { /* silent fail for mobile compatibility */ }
+  setTimeout(() => {
+    try {
+      if (!globalAudioCtx) return;
+      const osc = globalAudioCtx.createOscillator();
+      const gainNode = globalAudioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
+      osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.3); 
+      gainNode.gain.setValueAtTime(0.3, globalAudioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.5);
+      osc.connect(gainNode);
+      gainNode.connect(globalAudioCtx.destination);
+      osc.start();
+      osc.stop(globalAudioCtx.currentTime + 0.5);
+    } catch (e) { /* silent fail */ }
+  }, 0); // Pushed to background thread
 };
 
 const triggerHaptic = (pattern = 40) => {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate(pattern);
-    }
-  } catch (e) { /* ignore */ }
+  setTimeout(() => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(pattern);
+      }
+    } catch (e) { /* ignore */ }
+  }, 0); // Pushed to background thread
 };
 
 let titleInterval;
@@ -150,22 +154,20 @@ export default function App() {
 
     playChime();
     
-    // --- FIX: REMOVED VISIBILITY CHECK. OS NOTIFICATIONS ALWAYS FIRE NOW ---
+    // VISIBILITY CHECK REMOVED. OS NOTIFICATIONS WILL ALWAYS FIRE NOW.
     try {
       if ("Notification" in window && Notification.permission === "granted") {
-        // 1. Fire Standard Desktop OS Notification
-        new Notification(title, { body: body, icon: '/pwa-512x512.png' });
-        
-        // 2. Fire Android Service Worker Notification (Required for mobile)
         if (navigator.serviceWorker) {
           navigator.serviceWorker.ready.then(reg => {
             reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
-          }).catch(() => {});
+          }).catch(() => {
+            new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+          });
+        } else {
+          new Notification(title, { body: body, icon: '/pwa-512x512.png' });
         }
       }
-    } catch(e) { 
-      console.warn("Native Notification Blocked by OS"); 
-    }
+    } catch(e) { /* Safe fallback */ }
   };
 
   const depotSearchRef = useRef(null);
@@ -348,18 +350,19 @@ export default function App() {
   const fetchPendingData = async () => {
     if(!isOnline) return;
     try {
-        const promises = [
-          supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true }),
-          supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false }),
-          supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true }),
-          supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true })
-        ];
-        const results = await Promise.all(promises);
-        if (results[0].data) setPendingPOs(results[0].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
-        if (results[1].data) setIncomingDeliveries(results[1].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-        if (results[2].data) setPendingDepotReturns(results[2].data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
-        if (results[3].data) setPendingReturns(results[3].data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-    } catch(e) { /* silent fail */ }
+        // SEQUENTIAL FETCHING TO PREVENT SUPABASE TIMEOUTS
+        const poRes = await supabase.from('transactions').select('*').eq('status', 'PO_PLACED').order('timestamp', { ascending: true });
+        const dispRes = await supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false });
+        const retReqRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true });
+        const retInitRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true });
+
+        if (poRes.data) setPendingPOs(poRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+        if (dispRes.data) setIncomingDeliveries(dispRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+        if (retReqRes.data) setPendingDepotReturns(retReqRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
+        if (retInitRes.data) setPendingReturns(retInitRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
+    } catch(e) { 
+        console.error("Database Sync Lag", e);
+    }
   };
 
   const fetchLedgerData = async () => {
