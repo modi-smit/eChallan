@@ -103,8 +103,12 @@ export default function App() {
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [offlineQueue, setOfflineQueue] = useState(() => {
-    const saved = localStorage.getItem('god_offline_queue');
-    return saved ? JSON.parse(saved) : [];
+    try {
+        const saved = localStorage.getItem('god_offline_queue');
+        return saved ? JSON.parse(saved) : [];
+    } catch(e) {
+        return [];
+    }
   });
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -391,21 +395,28 @@ export default function App() {
         setUploadStatus(`${data.length} SKUs AVAILABLE`);
         localStorage.setItem('god_cached_items', JSON.stringify(data));
       } else {
-        const cached = localStorage.getItem('god_cached_items');
-        if (cached) {
-            setMasterItems(JSON.parse(cached));
-            setUploadStatus('OFFLINE CACHE ACTIVE');
-        } else {
+        try {
+            const cached = localStorage.getItem('god_cached_items');
+            if (cached) {
+                setMasterItems(JSON.parse(cached));
+                setUploadStatus('OFFLINE CACHE ACTIVE');
+            } else {
+                setMasterItems([]);
+                setUploadStatus('WAITING UPLOAD');
+            }
+        } catch(e) {
             setMasterItems([]);
             setUploadStatus('WAITING UPLOAD');
         }
       }
     } catch (err) {
-      const cached = localStorage.getItem('god_cached_items');
-      if (cached) {
-          setMasterItems(JSON.parse(cached));
-          setUploadStatus('OFFLINE CACHE ACTIVE');
-      }
+      try {
+          const cached = localStorage.getItem('god_cached_items');
+          if (cached) {
+              setMasterItems(JSON.parse(cached));
+              setUploadStatus('OFFLINE CACHE ACTIVE');
+          }
+      } catch(e) {}
     }
   };
 
@@ -642,7 +653,7 @@ export default function App() {
 
   const getCategory = (desc) => {
     const normDesc = normalizeString(desc);
-    const item = masterItems.find(i => normalizeString(i.description) === normDesc); 
+    const item = masterItems.find(i => normalizeString(i?.description) === normDesc); 
     if (item && item.category) return item.category;
     if (normDesc.includes('TYRE') || normDesc.includes('TUBE') || normDesc.match(/\d{2,3}\d{2,3}/)) return 'TVS';
     return 'SERVO';
@@ -658,8 +669,10 @@ export default function App() {
       if (normDesc.includes('75L') || normDesc.includes('10L') || normDesc.includes('15L') || normDesc.includes('20L') || normDesc.includes('26L') || normDesc.includes('26KG')) return 'BUC';
       return 'NOS';
     } else {
-      const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
-      if (learned[normDesc]) return learned[normDesc]; 
+      try {
+          const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}');
+          if (learned[normDesc]) return learned[normDesc]; 
+      } catch(e) {}
       return normDesc.includes('TT') ? 'SET' : 'PCS';
     }
   };
@@ -670,7 +683,7 @@ export default function App() {
     if (!unit || String(unit).toUpperCase() === 'CANS') unit = 'NOS'; 
     
     const normDesc = normalizeString(desc);
-    const item = masterItems.find(i => normalizeString(i.description) === normDesc);
+    const item = masterItems.find(i => normalizeString(i?.description) === normDesc);
     const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : '';
     
     if (item && item.category === 'SERVO' && item.ratio && !isNaN(parseFloat(item.ratio)) && parseFloat(item.ratio) > 1) {
@@ -682,7 +695,6 @@ export default function App() {
     }
     return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`;
   };
-
   // ==========================================
   // --- PDF GENERATOR (PRE-PRINTED GRID) ---
   // ==========================================
@@ -710,6 +722,9 @@ export default function App() {
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        
+        doc.setDrawColor(0, 0, 0);
+        doc.line(5, 21, 143, 21); // Header Bottom Divider
         
         // 3. METADATA
         doc.setFontSize(9);
@@ -812,330 +827,6 @@ export default function App() {
     doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
     
     // 10. SIGNATURES & PAGINATION
-    const sigY = y + 20;
-    drawSignatures(sigY);
-
-    doc.line(5, y + 7, 5, sigY + 7);
-    doc.line(143, y + 7, 143, sigY + 7);
-    doc.line(5, sigY + 7, 143, sigY + 7);
-
-    const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
-    }
-
-    doc.save(`${challanNo}.pdf`);
-  };
-
-  // ==========================================
-  // --- EXCEL EXPORTER ---
-  // ==========================================
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0]; 
-    if (!file) return; 
-    setUploadStatus('Processing...');
-    
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = new Uint8Array(e.target.result); 
-        const workbook = XLSX.read(data, { type: 'array' }); 
-        let finalItemsToUpload = [];
-        
-        const normalizeRow = (row) => { 
-            const normalized = {}; 
-            for (let key in row) normalized[String(key).toLowerCase().trim()] = row[key]; 
-            return normalized; 
-        };
-        
-        ['SERVO', 'TVS'].forEach(sheetName => {
-          const sheet = workbook.SheetNames.find(s => String(s).toUpperCase() === sheetName);
-          if (sheet) {
-            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => {
-              const norm = normalizeRow(row); 
-              return { 
-                  description: cleanDesc(norm.description), 
-                  ratio: parseFloat(norm.ratio) || 1, 
-                  category: sheetName, 
-                  sku: norm.sku || norm.code || norm.shortname || null 
-              };
-            }).filter(item => item.description);
-            finalItemsToUpload = [...finalItemsToUpload, ...formatted];
-          }
-        });
-        
-        await supabase.from('master_items').delete().neq('description', 'dummy'); 
-        await supabase.from('master_items').insert(finalItemsToUpload);
-        refreshAllData();
-      } catch (error) { 
-          setUploadStatus(`Error`); 
-      }
-    };
-    reader.readAsArrayBuffer(file); 
-  };
-
-  const downloadLedger = () => {
-    if(ledgerData.length === 0) { alert(`No data to export.`); return; }
-    
-    const dispatchedDataObj = {}; 
-    const returnsDataObj = {};
-    
-    ledgerData.forEach(row => {
-      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
-      if (row.status === 'RETURN_ACCEPTED') {
-         if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
-         returnsDataObj['RETURNS'].items.push(row);
-      } else {
-         if (!dispatchedDataObj[key]) dispatchedDataObj[key] = { date: row.timestamp, challan_no: row.challan_no, status: row.status, items: [], admin_note: row.admin_note };
-         if (row.admin_note && !dispatchedDataObj[key].admin_note) dispatchedDataObj[key].admin_note = row.admin_note;
-         dispatchedDataObj[key].items.push(row);
-      }
-    });
-
-    const dispatchedGroups = Object.values(dispatchedDataObj).sort((a, b) => new Date(b.date) - new Date(a.date));
-    const returnGroups = Object.values(returnsDataObj);
-    const itemSummary = {};
-    
-    ledgerData.forEach(row => {
-      const desc = cleanDesc(row.item_desc); 
-      const q = parseInt(row.disp_qty || row.req_qty) || 0;
-      
-      if(!itemSummary[desc]) itemSummary[desc] = { qty: 0, unit: row.unit || getUnit(desc), category: getCategory(desc), rawItemDesc: row.item_desc };
-      
-      if (row.status !== 'DELETED') {
-        if (row.status === 'RETURN_ACCEPTED') itemSummary[desc].qty -= q; 
-        else if (row.status === 'ACCEPTED' || row.status === 'DISPATCHED') itemSummary[desc].qty += q;
-      }
-    });
-
-    const sumEntries = Object.entries(itemSummary).filter(([_, data]) => data.qty !== 0); 
-    const servoEntries = sumEntries.filter(([_, data]) => data.category === 'SERVO');
-    const tvsEntries = sumEntries.filter(([_, data]) => data.category === 'TVS');
-
-    let htmlArray = [];
-    htmlArray.push(`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"></head><body>`);
-    htmlArray.push(`<table border="0" cellpadding="5" cellspacing="0" style="font-family:Arial,sans-serif;border-collapse:collapse;font-size:13px;"><colgroup><col width="130"/><col width="110"/><col width="380"/><col width="50"/><col width="130"/><col width="180"/><col width="30"/><col width="380"/><col width="80"/><col width="140"/></colgroup>`);
-
-    const cell = (bg, col, align, wrap, fw, isNum, text, rspan=1, cspan=1) => {
-        let st = `background-color:${bg};color:${col};border:1px solid black;padding:8px;vertical-align:middle;text-align:${align};font-weight:${fw};`;
-        st += wrap ? `white-space:normal;word-wrap:break-word;mso-style-textwrap:yes;` : `white-space:nowrap;`;
-        if (isNum) st += `mso-number-format:'\\@';`;
-        return `<td rowspan="${rspan}" colspan="${cspan}" style="${st}">${text}</td>`;
-    };
-
-    let leftRows = [];
-    let rightRows = [];
-    
-    leftRows.push(cell('#d1d5db', '#000', 'left', false, 'bold', false, `GUJARAT OIL DEPOT - LEDGER`, 1, 6));
-    leftRows.push(cell('#f3f4f6', '#000', 'left', false, 'bold', false, `BILLED TO: SOUTH GUJARAT DISTRIBUTORS`, 1, 6));
-    leftRows.push(
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'DATE/TIME') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'CHALLAN NO') + 
-        cell('#e5e7eb', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'NOS') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'QTY') + 
-        cell('#e5e7eb', '#000', 'center', false, 'bold', false, 'ADMIN NOTE')
-    );
-
-    let gTotal = 0;
-    dispatchedGroups.forEach(g => {
-        let bg = g.status === "DELETED" ? "#f3f4f6" : g.status === "ACCEPTED" ? "#dcfce7" : "#dbeafe";
-        let tc = g.status === "DELETED" ? "#9ca3af" : "#000";
-        let cText = g.status === "DELETED" ? `${g.challan_no||'-'} (DELETED)` : (g.challan_no||'-');
-        
-        g.items.forEach((r, i) => {
-            let rq = parseInt(r.disp_qty || r.req_qty) || 0;
-            if (g.status !== 'DELETED') gTotal += rq;
-            let rowHtml = "";
-            if (i === 0) {
-                rowHtml += cell(bg, '#000', 'center', true, 'bold', true, `${formatDate(g.date)}<br style="mso-data-placement:same-cell;"/>${formatTime(g.date)}`, g.items.length);
-                rowHtml += cell(bg, tc, 'center', false, 'bold', true, cText, g.items.length);
-            }
-            rowHtml += cell(bg, '#000', 'left', true, 'normal', false, cleanDesc(r.item_desc));
-            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(rq).padStart(2, '0'));
-            rowHtml += cell(bg, tc, 'center', false, 'bold', false, String(getDisplayQty(r.item_desc, rq, r.unit||getUnit(r.item_desc))).toUpperCase());
-            if (i === 0) rowHtml += cell(bg, '#000', 'left', true, 'normal', false, String(g.admin_note || ''), g.items.length);
-            leftRows.push(rowHtml);
-        });
-    });
-    
-    leftRows.push(cell('#d1d5db', '#000', 'right', false, 'bold', false, 'GRAND TOTAL:', 1, 3) + cell('#d1d5db', '#000', 'center', false, 'bold', false, String(gTotal).padStart(2, '0')) + cell('#d1d5db', '#000', 'left', false, 'normal', false, '', 1, 2));
-
-    rightRows.push(cell('#fde047', '#000', 'left', false, 'bold', false, `ITEM WISE SUMMARY`, 1, 3));
-    rightRows.push(cell('#fef08a', '#000', 'left', false, 'bold', false, `TOTAL SKUS: ${sumEntries.length}`, 1, 3));
-    rightRows.push(cell('#fef9c3', '#000', 'left', false, 'bold', false, 'ITEM DESCRIPTION') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'TOTAL NOS') + cell('#fef9c3', '#000', 'center', false, 'bold', false, 'CONVERTED QTY'));
-    
-    if (servoEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'SERVO LUBRICANTS', 1, 3));
-        let sTot = 0;
-        servoEntries.forEach(([d, v]) => { 
-            sTot += v.qty; 
-            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
-        });
-        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(sTot).padStart(2, '0')));
-    }
-    
-    if (tvsEntries.length > 0) {
-        rightRows.push(cell('#fde047', '#1e3a8a', 'center', false, 'bold', false, 'TVS TYRES & TUBES', 1, 3));
-        let tTot = 0;
-        tvsEntries.forEach(([d, v]) => { 
-            tTot += v.qty; 
-            rightRows.push(cell('#fef9c3', '#000', 'left', true, 'normal', false, cleanDesc(v.rawItemDesc)) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(v.qty).padStart(2,'0')) + cell('#fef9c3', '#000', 'center', false, 'bold', false, String(getDisplayQty(d, v.qty, v.unit)).toUpperCase())); 
-        });
-        rightRows.push(cell('#fef08a', '#000', 'right', false, 'bold', false, 'GROUP TOTAL:', 1, 2) + cell('#fef08a', '#000', 'center', false, 'bold', false, String(tTot).padStart(2, '0')));
-    }
-
-    const maxRows = Math.max(leftRows.length, rightRows.length);
-    for(let i=0; i<maxRows; i++) {
-        htmlArray.push(`<tr style="height:35px;">`);
-        htmlArray.push(leftRows[i] ? leftRows[i] : `<td colspan="6" style="border:none;"></td>`);
-        htmlArray.push(`<td style="border:none;width:30px;"></td>`);
-        htmlArray.push(rightRows[i] ? rightRows[i] : `<td colspan="3" style="border:none;"></td>`);
-        htmlArray.push(`</tr>`);
-    }
-    htmlArray.push(`</table></body></html>`);
-
-    const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); 
-    a.href = url; 
-    a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`;
-    document.body.appendChild(a); 
-    a.click(); 
-    document.body.removeChild(a);
-  };
-  // ==========================================
-  // --- PDF GENERATOR (PRE-PRINTED GRID) ---
-  // ==========================================
-  const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); 
-    const isReturn = String(challanNo).startsWith('RT');
-    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
-    
-    let totalNos = 0;
-    
-    const drawPageHeaders = () => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // Master Outer Border (148x210mm A5 Page)
-        doc.rect(5, 5, 138, 195); 
-
-        // Header
-        doc.setFillColor(235, 235, 235); 
-        doc.rect(5, 5, 138, 16, 'F'); 
-        doc.rect(5, 5, 138, 16); 
-        
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
-        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); 
-        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        
-        // Metadata
-        doc.setFontSize(9);
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
-        doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-        
-        // Table Header
-        doc.setFillColor(245, 245, 245); 
-        doc.rect(5, 41, 138, 7, 'F'); 
-        doc.rect(5, 41, 138, 7); 
-        
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); 
-        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 115, 46, { align: "center" }); 
-        doc.text("QTY", 134, 46, { align: "center" });
-        doc.setFont("helvetica", "normal");
-    };
-
-    const drawPageGrid = (endY) => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // Vertical Grid Lines
-        doc.line(15, 48, 15, endY);   // SR
-        doc.line(105, 48, 105, endY); // Desc
-        doc.line(125, 48, 125, endY); // NOS
-        
-        // Bottom Closure Line
-        doc.line(5, endY, 143, endY); 
-    };
-
-    const drawSignatures = (sigY) => {
-        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
-        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
-          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
-        }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
-        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
-    };
-
-    drawPageHeaders();
-    let y = 53;
-    const maxY = 165; 
-
-    itemsList.forEach((item, index) => {
-      const desc = String(item.description || item.item_desc || ''); 
-      const splitDesc = doc.splitTextToSize(desc, 85); 
-      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; 
-      totalNos += rawQty;
-      
-      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); 
-      const paddedQty = String(rawQty).padStart(2, '0');
-      const rowHeight = (splitDesc.length * 4) + 1;
-      
-      // Page Break Engine
-      if (y + rowHeight > maxY) {
-          drawPageGrid(maxY);
-          drawSignatures(maxY + 15);
-          
-          doc.line(5, maxY, 5, maxY + 22);
-          doc.line(143, maxY, 143, maxY + 22);
-          doc.line(5, maxY + 22, 143, maxY + 22);
-
-          doc.addPage();
-          drawPageHeaders();
-          y = 53;
-      }
-
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
-      doc.text(splitDesc, 17, y); 
-      doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 115, y, { align: "center" }); 
-      doc.setFontSize(8); 
-      doc.text(displayStr, 134, y, { align: "center" });
-      doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      
-      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
-        doc.setLineWidth(0.1); 
-        doc.setDrawColor(200, 200, 200); 
-        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
-        doc.setDrawColor(0, 0, 0); 
-      }
-      y += rowHeight + 2; 
-    });
-
-    // LAST PAGE CLOSURE & TOTAL BOX
-    drawPageGrid(y);
-    doc.setFillColor(235, 235, 235); 
-    doc.rect(5, y, 100, 7, 'F'); 
-    doc.rect(105, y, 38, 7, 'F'); 
-    doc.rect(5, y, 138, 7, 'S'); 
-    doc.line(105, y, 105, y + 7); 
-
-    doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
-    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
-    
-    // SIGNATURES & PAGINATION
     const sigY = y + 20;
     drawSignatures(sigY);
 
@@ -1736,9 +1427,7 @@ export default function App() {
                   <div className="flex text-[11px] font-bold text-gray-500 px-2 uppercase"><span className="w-8 text-center">CHK</span><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 md:w-24 text-center">RCVD QTY</span></div>
                   {verifyModal.items.map((item, idx) => (
                     <label key={idx} className={`flex items-center space-x-2 md:space-x-3 p-2 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                      <div className="w-8 flex justify-center">
-                          <input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-6 h-6 cursor-pointer accent-blue-600" />
-                      </div>
+                      <div className="w-8 flex justify-center"><input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-6 h-6 cursor-pointer accent-blue-600" /></div>
                       <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
                       <input type="number" value={item.edit_qty} onClick={(e) => e.stopPropagation()} onChange={(e) => {
                               const updated = [...verifyModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setVerifyModal({ ...verifyModal, items: updated });
@@ -1788,7 +1477,7 @@ export default function App() {
                   <div key={idx} className="flex items-center gap-2 bg-red-50 border border-red-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
@@ -1800,7 +1489,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- RESPONSIVE MOBILE NAVBAR FIX --- */}
+      {/* --- RESPONSIVE MOBILE NAVBAR (FIXED) --- */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm">
         <div className="container mx-auto flex flex-col sm:flex-row justify-between items-center gap-3 w-full font-bold uppercase">
           
@@ -1898,14 +1587,14 @@ export default function App() {
                   </thead>
                   <tbody>
                     {Object.values(ledgerData.reduce((acc, row) => {
-                      const key = String(row.challan_no || row.group_id || ''); 
+                      const key = String(row?.challan_no || row?.group_id || ''); 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
                     }, {})).length === 0 ? (
                       <tr><td colSpan={userRole === 'master' ? "8" : "7"} className="p-6 md:p-8 text-center text-gray-500 font-bold uppercase text-[13px] md:text-base">No records for {monthNames[ledgerMonth]} {ledgerYear}</td></tr>
                     ) : Object.values(ledgerData.reduce((acc, row) => {
-                      const key = String(row.challan_no || row.group_id || ''); 
+                      const key = String(row?.challan_no || row?.group_id || ''); 
                       if (!acc[key]) acc[key] = { ...row, items: [], keyValue: key, keyField: row.challan_no ? 'challan_no' : 'group_id' };
                       if (row.admin_note && !acc[key].admin_note) acc[key].admin_note = row.admin_note;
                       acc[key].items.push(row); return acc;
@@ -1913,7 +1602,7 @@ export default function App() {
                     .sort((a, b) => String(b.keyValue).localeCompare(String(a.keyValue))) 
                     .map((group, idx) => {
                       
-                      const sortedItems = [...group.items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+                      const sortedItems = [...group.items].sort((a,b) => String(a?.item_desc || '').localeCompare(String(b?.item_desc || '')));
                       const isExpanded = expandedGroups[group.keyValue];
                       const visibleItems = isExpanded ? sortedItems : sortedItems.slice(0, 3);
                       const hiddenCount = sortedItems.length - 3;
@@ -1929,7 +1618,7 @@ export default function App() {
                         </td>
                         <td className="p-2 md:p-3 border-r border-gray-200">
                           <ul className="space-y-1 md:space-y-1.5">
-                            {visibleItems.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[250px] md:max-w-[300px] xl:max-w-[400px] ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`} title={i.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-1 md:mr-2 mb-0.5"></span>{i.item_desc}</li>)}
+                            {visibleItems.map((i, k) => <li key={k} className={`font-bold border-b border-gray-200 last:border-0 pb-1 uppercase truncate max-w-[250px] md:max-w-[300px] xl:max-w-[400px] ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`} title={i?.item_desc}><span className="w-1.5 h-1.5 bg-gray-400 inline-block rounded-full mr-1 md:mr-2 mb-0.5"></span>{i?.item_desc}</li>)}
                             {hiddenCount > 0 && !isExpanded && <li className="text-blue-700 cursor-pointer font-black text-[11px] mt-1 uppercase" onClick={() => toggleGroupExpand(group.keyValue)}>+ {hiddenCount} MORE ITEMS</li>}
                             {hiddenCount > 0 && isExpanded && <li className="text-blue-700 cursor-pointer font-black text-[11px] mt-1 uppercase" onClick={() => toggleGroupExpand(group.keyValue)}>SHOW LESS</li>}
                           </ul>
@@ -1941,7 +1630,7 @@ export default function App() {
                         </td>
                         <td className="p-2 md:p-3 border-r border-gray-200 text-right pr-4 whitespace-nowrap">
                            <ul className="space-y-1 md:space-y-1.5">
-                            {visibleItems.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{getDisplayQty(i.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
+                            {visibleItems.map((i, k) => <li key={k} className={`font-bold pb-1 ${group.status==='RETURN_ACCEPTED'?'text-red-600':''} ${group.status === 'DELETED' ? 'line-through text-gray-500' : ''}`}>{getDisplayQty(i?.item_desc, i.disp_qty || i.req_qty, i.unit)}</li>)}
                           </ul>
                         </td>
                         <td className="p-2 md:p-3 border-r border-gray-200 align-top select-none">
@@ -2148,7 +1837,6 @@ export default function App() {
           </div>
         )}
 
-        {/* RETAIL VIEW */}
         {view === 'retail' && (
           <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-start">
             <div className="w-full md:w-1/2 flex flex-col gap-3 md:gap-4 order-1 md:order-1">
