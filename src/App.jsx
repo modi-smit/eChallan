@@ -1,44 +1,65 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
+// ==========================================
+// --- HARDWARE ENGINES (INSTANT RESPONSE) ---
+// ==========================================
 let globalAudioCtx = null;
 const initAudio = () => {
-  if (!globalAudioCtx) { const AudioCtx = window.AudioContext || window.webkitAudioContext; if (AudioCtx) globalAudioCtx = new AudioCtx(); }
+  if (!globalAudioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) globalAudioCtx = new AudioCtx();
+  }
   if (globalAudioCtx && globalAudioCtx.state === 'suspended') globalAudioCtx.resume();
 };
 
 const playChime = () => {
-  setTimeout(() => {
-    try {
-      if (!globalAudioCtx) return;
-      const osc = globalAudioCtx.createOscillator(); const gainNode = globalAudioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.3); 
-      gainNode.gain.setValueAtTime(0.3, globalAudioCtx.currentTime); gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.5);
-      osc.connect(gainNode); gainNode.connect(globalAudioCtx.destination); osc.start(); osc.stop(globalAudioCtx.currentTime + 0.5);
-    } catch (e) {}
-  }, 0);
+  try {
+    if (!globalAudioCtx) return;
+    const osc = globalAudioCtx.createOscillator();
+    const gainNode = globalAudioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
+    osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.1); 
+    gainNode.gain.setValueAtTime(0.1, globalAudioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.3);
+    osc.connect(gainNode);
+    gainNode.connect(globalAudioCtx.destination);
+    osc.start();
+    osc.stop(globalAudioCtx.currentTime + 0.3);
+  } catch (e) {}
 };
 
-const triggerHaptic = (pattern = 40) => { setTimeout(() => { try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch (e) {} }, 0); };
+const triggerHaptic = (pattern = 40) => {
+  try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
+};
 
 let titleInterval;
 const blinkTitle = (msg) => {
-  clearInterval(titleInterval); const originalTitle = "GOD eChallan"; let showMsg = true;
+  clearInterval(titleInterval);
+  const originalTitle = "GOD eChallan";
+  let showMsg = true;
   titleInterval = setInterval(() => { document.title = showMsg ? msg : originalTitle; showMsg = !showMsg; }, 1000);
   window.addEventListener('focus', () => { clearInterval(titleInterval); document.title = originalTitle; }, { once: true });
 };
 
+// ==========================================
+// --- SAFE CLEANERS & OFFLINE GENERATOR ---
+// ==========================================
 const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
 const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 
 const getOfflineSequence = (prefix) => {
-  const now = new Date(); const dd = String(now.getDate()).padStart(2, '0'); const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const yy = String(now.getFullYear()).slice(-2); const hh = String(now.getHours()).padStart(2, '0'); const min = String(now.getMinutes()).padStart(2, '0');
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yy = String(now.getFullYear()).slice(-2);
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
   if (prefix === 'M' || prefix === 'MANUAL') return `M${dd}${mm}${yy}${hh}${min}`;
   return `${prefix}${dd}${mm}${yy}${hh}${min}`;
 };
@@ -102,6 +123,9 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
+  // ==========================================
+  // --- NATIVE NOTIFICATION ENGINE ---
+  // ==========================================
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now(); setToasts(prev => [...prev, { id, title, body, type }]);
     setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
@@ -122,6 +146,9 @@ export default function App() {
   const retailSearchRef = useRef(null); const retailQtyRef = useRef(null);
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
+  // ==========================================
+  // --- LIFECYCLE & SYNC ---
+  // ==========================================
   useEffect(() => { const timer = setTimeout(() => { if(loadingAuth) setLoadingAuth(false); }, 6000); return () => clearTimeout(timer); }, [loadingAuth]);
 
   useEffect(() => {
@@ -151,11 +178,18 @@ export default function App() {
   useEffect(() => {
     document.title = "GOD eChallan";
     const initializeAuth = async () => {
-      try { const { data: { session }, error } = await supabase.auth.getSession(); if (error) throw error; if (session) { setSession(session); await fetchRole(session.user.id); } else { setLoadingAuth(false); } } catch (err) { setLoadingAuth(false); }
-    }; initializeAuth();
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (session) { setSession(session); await fetchRole(session.user.id); } else { setLoadingAuth(false); }
+      } catch (err) { setLoadingAuth(false); }
+    };
+    initializeAuth();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') { setSession(null); setUserRole(null); setView(''); setLoadingAuth(false); } else if (session) { setSession(session); fetchRole(session.user.id); }
-    }); return () => subscription.unsubscribe();
+      if (event === 'SIGNED_OUT') { setSession(null); setUserRole(null); setView(''); setLoadingAuth(false); } 
+      else if (session) { setSession(session); fetchRole(session.user.id); }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => { const isDesktop = window.innerWidth > 768; if (isDesktop) { if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100); if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100); } }, [view, depotMode, retailMode]);
@@ -167,17 +201,32 @@ export default function App() {
       if (data) {
         const currentRole = data.role ? String(data.role).toLowerCase().trim() : 'unassigned';
         setUserRole(currentRole); fetchAvailableYears();
+        
         try {
-            if (window.OneSignalDeferred) { window.OneSignalDeferred.push(async function(OneSignal) { await OneSignal.init({ appId: "YOUR_ONESIGNAL_APP_ID_HERE", safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", notifyButton: { enable: false }}); OneSignal.User.PushSubscription.optIn(); OneSignal.User.addTag("role", currentRole); }); }
+            if (window.OneSignalDeferred) {
+              window.OneSignalDeferred.push(async function(OneSignal) {
+                await OneSignal.init({ appId: "YOUR_ONESIGNAL_APP_ID_HERE", safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", notifyButton: { enable: false }});
+                if(OneSignal.User) { OneSignal.User.PushSubscription.optIn(); OneSignal.User.addTag("role", currentRole); }
+              });
+            }
         } catch(e) {}
-        if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); else if (currentRole === 'retail') setView('retail'); else if (currentRole === 'depot') setView('depot'); else setView('unassigned'); 
-      }
-    } catch (err) { } finally { setLoadingAuth(false); }
+
+        if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
+        else if (currentRole === 'retail') setView('retail'); 
+        else if (currentRole === 'depot') setView('depot'); 
+        else setView('unassigned'); 
+      } else { setView('unassigned'); }
+    } catch (err) { setView('unassigned'); } finally { setLoadingAuth(false); }
   }
 
   async function handleLogin(e) {
     e.preventDefault(); triggerHaptic([30, 50]); initAudio(); 
-    if ("Notification" in window && Notification.permission === "default") { try { Notification.requestPermission(); } catch(err) { } }
+    
+    // FORCE PERMISSION CHECK ON CLICK
+    if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+        try { Notification.requestPermission(); } catch(err) { }
+    }
+
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
@@ -220,6 +269,7 @@ export default function App() {
         const dispRes = await supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false });
         const retReqRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true });
         const retInitRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true });
+
         if (poRes.data) setPendingPOs(poRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
         if (dispRes.data) setIncomingDeliveries(dispRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
         if (retReqRes.data) setPendingDepotReturns(retReqRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
@@ -270,7 +320,9 @@ export default function App() {
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole, isOnline]);
-
+// ==========================================
+  // --- DATABASE EXECUTORS ---
+  // ==========================================
   const syncOfflineQueue = async () => {
     if (!isOnline || offlineQueue.length === 0 || isSyncing) return;
     setIsSyncing(true); let remaining = [...offlineQueue]; let syncedCount = 0;
@@ -347,14 +399,20 @@ export default function App() {
   const getUnit = (desc) => { if (!desc) return 'NOS'; const normDesc = normalizeString(desc); let cat = getCategory(desc); if (cat === 'SERVO') { if (normDesc.includes('210L') || normDesc.includes('182KG')) return 'BRL'; if (normDesc.includes('50L')) return 'DRUM'; if (normDesc.includes('75L') || normDesc.includes('10L') || normDesc.includes('15L') || normDesc.includes('20L') || normDesc.includes('26L') || normDesc.includes('26KG')) return 'BUC'; return 'NOS'; } else { try{ const learned = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); if (learned[normDesc]) return learned[normDesc]; return normDesc.includes('TT') ? 'SET' : 'PCS'; }catch(e){return 'PCS';} } };
   const getDisplayQty = (desc, qty, rawUnit) => { if (!desc) return `0 NOS`; let unit = rawUnit; if (!unit || String(unit).toUpperCase() === 'CANS') unit = 'NOS'; const normDesc = normalizeString(desc); const item = masterItems.find(i => normalizeString(i?.description) === normDesc); const isNegative = qty < 0; const absQty = Math.abs(qty); const sign = isNegative ? '- ' : ''; if (item && item.category === 'SERVO' && item.ratio && !isNaN(parseFloat(item.ratio)) && parseFloat(item.ratio) > 1) { const ratio = parseFloat(item.ratio); const cases = Math.floor(absQty / ratio); const cans = absQty % ratio; let parts = []; if (cases > 0) parts.push(`${cases} CAR`); if (cans > 0) parts.push(`${cans} ${unit}`); return parts.length > 0 ? sign + parts.join(' + ') : `0 ${unit}`; } return `${isNegative ? '-' : ''}${absQty || 0} ${unit}`; };
 
+  // ==========================================
+  // --- FAST SMART SEARCH (MEMOIZED) ---
+  // ==========================================
   const smartSearch = (query) => {
     if (!query) return []; const sq = normalizeString(query); let aliasedDesc = null;
     try { const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}'); aliasedDesc = aliases[sq]; } catch(e){}
     const terms = sq.split(' ').filter(Boolean); 
-    let results = masterItems.filter(item => { if (aliasedDesc && normalizeString(item.description) === normalizeString(aliasedDesc)) return true; return terms.every(term => String(item.search_target).includes(term)); });
-    if (aliasedDesc) { const exactMatch = results.find(i => normalizeString(i.description) === normalizeString(aliasedDesc)); if (exactMatch) { results = results.filter(i => normalizeString(i.description) !== normalizeString(aliasedDesc)); results.unshift(exactMatch); } }
+    let results = masterItems.filter(item => { if (aliasedDesc && normalizeString(item?.description) === normalizeString(aliasedDesc)) return true; return terms.every(term => String(item?.search_target || '').includes(term)); });
+    if (aliasedDesc) { const exactMatch = results.find(i => normalizeString(i?.description) === normalizeString(aliasedDesc)); if (exactMatch) { results = results.filter(i => normalizeString(i?.description) !== normalizeString(aliasedDesc)); results.unshift(exactMatch); } }
     return results.slice(0, 50);
   };
+  
+  const depotFilteredItems = useMemo(() => smartSearch(searchQuery), [searchQuery, masterItems]);
+  const retailFilteredItems = useMemo(() => smartSearch(retailSearch), [retailSearch, masterItems]);
 
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); const isReturn = String(challanNo).startsWith('RT'); const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); let totalNos = 0;
@@ -390,7 +448,7 @@ export default function App() {
 
     drawPageHeaders(); let y = 53; const maxY = 165; 
     itemsList.forEach((item, index) => {
-      const desc = String(item.description || item.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
+      const desc = String(item?.description || item?.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
       const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
       const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
@@ -424,7 +482,7 @@ export default function App() {
         ['SERVO', 'TVS'].forEach(sheetName => {
           const sheet = workbook.SheetNames.find(s => String(s).toUpperCase() === sheetName);
           if (sheet) {
-            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => { const norm = normalizeRow(row); return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null }; }).filter(item => item.description);
+            const formatted = XLSX.utils.sheet_to_json(workbook.Sheets[sheet]).map(row => { const norm = normalizeRow(row); return { description: cleanDesc(norm.description), ratio: parseFloat(norm.ratio) || 1, category: sheetName, sku: norm.sku || norm.code || norm.shortname || null }; }).filter(item => item?.description);
             finalItemsToUpload = [...finalItemsToUpload, ...formatted];
           }
         });
@@ -437,7 +495,7 @@ export default function App() {
     if(ledgerData.length === 0) { alert(`No data to export.`); return; }
     const dispatchedDataObj = {}; const returnsDataObj = {};
     ledgerData.forEach(row => {
-      const key = String(row.challan_no || row.group_id || 'UNKNOWN');
+      const key = String(row?.challan_no || row?.group_id || 'UNKNOWN');
       if (row.status === 'RETURN_ACCEPTED') {
          if (!returnsDataObj['RETURNS']) returnsDataObj['RETURNS'] = { isReturnGroup: true, items: [], date: row.timestamp };
          returnsDataObj['RETURNS'].items.push(row);
@@ -495,10 +553,10 @@ export default function App() {
   };
 
   const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
-    setItemState(item); setSearchState(item.description); let newUnit = getUnit(item.description); setUnitState(newUnit);
-    if (item.category === 'TVS') { try{const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));}catch(e){} }
+    setItemState(item); setSearchState(item?.description || ''); let newUnit = getUnit(item?.description); setUnitState(newUnit);
+    if (item?.category === 'TVS') { try{const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));}catch(e){} }
     setHighlightIndex(-1); if(setDropdownState) setDropdownState(false);
-    if (searchQueryStr && String(searchQueryStr).length >= 2) { const sq = normalizeString(searchQueryStr); if (sq !== normalizeString(item.description) && (!item.sku || sq !== normalizeString(item.sku))) { try{const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}'); aliases[sq] = item.description; localStorage.setItem('god_aliases', JSON.stringify(aliases));}catch(e){} } }
+    if (searchQueryStr && String(searchQueryStr).length >= 2) { const sq = normalizeString(searchQueryStr); if (sq !== normalizeString(item?.description) && (!item?.sku || sq !== normalizeString(item?.sku))) { try{const aliases = JSON.parse(localStorage.getItem('god_aliases') || '{}'); aliases[sq] = item?.description; localStorage.setItem('god_aliases', JSON.stringify(aliases));}catch(e){} } }
     triggerHaptic(30); const isDesktop = window.innerWidth > 768; if (isDesktop) setTimeout(() => focusRef?.current?.focus(), 50);
   };
 
@@ -555,7 +613,7 @@ export default function App() {
 
   const openVerifyModal = (challanNo, items) => {
     triggerHaptic(30); const checks = {}; items.forEach((_, i) => checks[i] = false);
-    const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || '')));
+    const sortedItems = [...items].sort((a,b) => String(a?.item_desc || '').localeCompare(String(b?.item_desc || '')));
     setVerifyModal({ challanNo, items: sortedItems.map(i => ({ ...i, edit_qty: i.disp_qty || i.req_qty })), checks, isDepotReturn: challanNo ? String(challanNo).startsWith('RT') : false });
   };
   const toggleVerifyCheck = (index) => { triggerHaptic(20); setVerifyModal(prev => ({ ...prev, checks: { ...prev.checks, [index]: !prev.checks[index] } })); };
@@ -576,7 +634,7 @@ export default function App() {
     } catch (err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  const openEditPOModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || ''))); setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const openEditPOModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a?.item_desc || '').localeCompare(String(b?.item_desc || ''))); setEditPOModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
   const handleEditPOQty = (index, val) => { const updated = [...editPOModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setEditPOModal({ ...editPOModal, items: updated }); };
   
   const confirmDispatchPO = async () => {
@@ -600,7 +658,7 @@ export default function App() {
     } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  const openProcessReturnModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a.item_desc || '').localeCompare(String(b.item_desc || ''))); setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
+  const openProcessReturnModal = (groupId, items) => { triggerHaptic(30); const sortedItems = [...items].sort((a,b) => String(a?.item_desc || '').localeCompare(String(b?.item_desc || ''))); setProcessReturnModal({ groupId, items: sortedItems.map(i => ({ ...i, edit_qty: i.req_qty })) }); };
   const handleProcessReturnQty = (index, val) => { const updated = [...processReturnModal.items]; updated[index] = { ...updated[index], edit_qty: val }; setProcessReturnModal({ ...processReturnModal, items: updated }); };
 
   const confirmProcessReturnRequest = async () => {
@@ -624,24 +682,10 @@ export default function App() {
     } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
-  // ==========================================
-  // --- UI RENDER BEGIN ---
-  // ==========================================
-
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
-          <div className="text-gray-800 font-black tracking-widest uppercase text-lg">INITIALIZING SYSTEM...</div>
-      </div>
-    </div>
-  );
-
-  if (session && view === '') return (
-    <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
-      <div className="bg-yellow-100 border-2 border-yellow-600 p-8 text-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] max-w-md">
-        <h2 className="text-xl font-black text-yellow-800 mb-2">NETWORK DELAY</h2>
-        <p className="font-bold text-gray-800 text-sm mb-4">The database is taking too long to load your profile. Please refresh.</p>
-        <button onClick={() => window.location.reload()} className="w-full bg-yellow-600 text-white py-3 font-bold uppercase border-2 border-yellow-800 hover:bg-yellow-700">FORCE REFRESH</button>
+          <div className="text-gray-800 font-black tracking-widest uppercase text-lg">LOADING WORKSPACE...</div>
       </div>
     </div>
   );
@@ -666,7 +710,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
       
-      {/* TOASTS */}
       <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black font-bold uppercase text-sm animate-slide-in flex items-center gap-3 w-72 bg-white text-black`}>
@@ -677,7 +720,6 @@ export default function App() {
       </div>
       <style dangerouslySetInnerHTML={{__html: `@keyframes slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } .animate-slide-in { animation: slide-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; } .hide-scrollbar::-webkit-scrollbar { display: none; } .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }`}} />
 
-      {/* SETTINGS MODAL */}
       {settingsModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[70]">
             <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -692,7 +734,6 @@ export default function App() {
         </div>
       )}
 
-      {/* DELETE MODAL */}
       {deleteModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-md w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -701,7 +742,7 @@ export default function App() {
                 <div className="flex flex-col gap-3">
                     <button onClick={() => executeDelete('SOFT')} disabled={isProcessing} className="w-full bg-gray-200 border-2 border-black p-3 text-left hover:bg-gray-300 transition-colors disabled:opacity-50">
                         <span className="block text-black font-black text-sm">1. VOID (Soft Delete)</span>
-                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the sequence number in the ledger for auditing transparency.</span>
+                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the sequence number.</span>
                     </button>
                     <button onClick={() => executeDelete('HARD')} disabled={isProcessing} className="w-full bg-red-100 border-2 border-red-900 p-3 text-left hover:bg-red-200 transition-colors disabled:opacity-50">
                         <span className="block text-red-900 font-black text-sm">2. WIPE COMPLETELY (Hard Delete)</span>
@@ -713,7 +754,6 @@ export default function App() {
         </div>
       )}
 
-      {/* MASTER EDIT MODAL */}
       {masterEditModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -733,7 +773,7 @@ export default function App() {
                     </div>
                   </div>
                 ))}
-                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m.description} />)}</datalist>
+                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m?.description} />)}</datalist>
               </div>
               <div className="flex space-x-2">
                 <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
@@ -743,7 +783,6 @@ export default function App() {
         </div>
       )}
 
-      {/* VERIFY MODAL */}
       {verifyModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -768,7 +807,6 @@ export default function App() {
         </div>
       )}
 
-      {/* EDIT PO MODAL */}
       {editPOModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -791,7 +829,6 @@ export default function App() {
         </div>
       )}
 
-      {/* PROCESS RETURN MODAL */}
       {processReturnModal && (
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
@@ -814,7 +851,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- RESPONSIVE MOBILE NAVBAR --- */}
+      {/* --- RESPONSIVE MOBILE NAVBAR (SINGLE LINE FIXED) --- */}
       <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm flex items-center justify-between">
         <div className="flex items-center gap-2 flex-shrink-0">
             <span className="tracking-widest hidden sm:inline font-bold">GUJARAT OIL DEPOT</span>
@@ -823,7 +860,7 @@ export default function App() {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
                 else alert("Emergency URL not set. Ask Master to configure Settings.");
-            }} className="hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+            }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
             {actionableCount > 0 && (
               <span className="relative flex h-3 w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
