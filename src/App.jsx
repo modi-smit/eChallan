@@ -147,27 +147,43 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   
   // --- ROBUST NOTIFICATION ENGINE (SERVICE WORKER FALLBACK) ---
+  // --- ROBUST NOTIFICATION ENGINE (ANDROID & WINDOWS COMPATIBLE) ---
   const triggerSystemAlert = (title, body, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, title, body, type }]);
     setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
 
+    // Always play the sound
     playChime();
-    
-    // VISIBILITY CHECK REMOVED. OS NOTIFICATIONS WILL ALWAYS FIRE NOW.
+
+    // Force Native OS Notification (Even if app is open)
     try {
       if ("Notification" in window && Notification.permission === "granted") {
-        if (navigator.serviceWorker) {
-          navigator.serviceWorker.ready.then(reg => {
-            reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+        
+        // ANDROID FIX: Must route through Service Worker
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(registrations => {
+            if (registrations.length > 0) {
+              registrations[0].showNotification(title, { 
+                  body: body, 
+                  icon: '/pwa-512x512.png', 
+                  badge: '/pwa-512x512.png',
+                  vibrate: [200, 100, 200] 
+              });
+            } else {
+              // Windows / Desktop Fallback
+              new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+            }
           }).catch(() => {
-            new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+              new Notification(title, { body: body, icon: '/pwa-512x512.png' });
           });
         } else {
           new Notification(title, { body: body, icon: '/pwa-512x512.png' });
         }
       }
-    } catch(e) { /* Safe fallback */ }
+    } catch(e) { 
+      console.warn("Native notification blocked by OS"); 
+    }
   };
 
   const depotSearchRef = useRef(null);
@@ -283,8 +299,16 @@ export default function App() {
     e.preventDefault(); 
     triggerHaptic([30, 50]);
     initAudio(); 
+    
+    // --- ANDROID FIX: FIRE PERMISSION IMMEDIATELY ON TAP ---
+    // If we wait for the database, Android spam-blockers will kill the prompt.
+    if ("Notification" in window && Notification.permission === "default") {
+        try { Notification.requestPermission(); } catch(err) { }
+    }
+
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
+    
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
@@ -296,19 +320,19 @@ export default function App() {
           if (window.OneSignalDeferred) {
             window.OneSignalDeferred.push(async function(OneSignal) {
               await OneSignal.init({
-                appId: "YOUR_ONESIGNAL_APP_ID_HERE", 
+                appId: "YOUR_ONESIGNAL_APP_ID_HERE", // <-- Ensure your ID is here
                 safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", 
-                notifyButton: { enable: true },
+                notifyButton: { enable: false }, // Hide the bell, we do it natively now
               });
+              
+              // Tell OneSignal to link with the native permission we just got
               OneSignal.User.PushSubscription.optIn();
+              
               const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
               if (roleData && roleData.role) {
                  OneSignal.User.addTag("role", String(roleData.role).toLowerCase().trim());
               }
             });
-          }
-          if ("Notification" in window && Notification.permission === "default" && !localStorage.getItem("god_notif_asked")) {
-            Notification.requestPermission().then(() => { localStorage.setItem("god_notif_asked", "true"); });
           }
       } catch(e) { /* Safe fallback */ }
     }
