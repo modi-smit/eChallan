@@ -5,16 +5,16 @@ import { supabase } from './supabaseClient';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
-// ==========================================
-// --- HARDWARE ENGINES (INSTANT RESPONSE) ---
-// ==========================================
+// --- HARDWARE ENGINES (Audio & Haptics) ---
 let globalAudioCtx = null;
 const initAudio = () => {
   if (!globalAudioCtx) {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) globalAudioCtx = new AudioCtx();
   }
-  if (globalAudioCtx && globalAudioCtx.state === 'suspended') globalAudioCtx.resume();
+  if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+    globalAudioCtx.resume();
+  }
 };
 
 const playChime = () => {
@@ -24,18 +24,22 @@ const playChime = () => {
     const gainNode = globalAudioCtx.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
-    osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.1); 
-    gainNode.gain.setValueAtTime(0.1, globalAudioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.3);
+    osc.frequency.exponentialRampToValueAtTime(440, globalAudioCtx.currentTime + 0.3); 
+    gainNode.gain.setValueAtTime(0.3, globalAudioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, globalAudioCtx.currentTime + 0.5);
     osc.connect(gainNode);
     gainNode.connect(globalAudioCtx.destination);
     osc.start();
-    osc.stop(globalAudioCtx.currentTime + 0.3);
-  } catch (e) {}
+    osc.stop(globalAudioCtx.currentTime + 0.5);
+  } catch (e) { /* silent fail for mobile compatibility */ }
 };
 
 const triggerHaptic = (pattern = 40) => {
-  try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
+  try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  } catch (e) { /* ignore */ }
 };
 
 let titleInterval;
@@ -43,16 +47,22 @@ const blinkTitle = (msg) => {
   clearInterval(titleInterval);
   const originalTitle = "GOD eChallan";
   let showMsg = true;
-  titleInterval = setInterval(() => { document.title = showMsg ? msg : originalTitle; showMsg = !showMsg; }, 1000);
-  window.addEventListener('focus', () => { clearInterval(titleInterval); document.title = originalTitle; }, { once: true });
+  titleInterval = setInterval(() => {
+    document.title = showMsg ? msg : originalTitle;
+    showMsg = !showMsg;
+  }, 1000);
+  
+  window.addEventListener('focus', () => {
+    clearInterval(titleInterval);
+    document.title = originalTitle;
+  }, { once: true });
 };
 
-// ==========================================
-// --- SAFE CLEANERS & OFFLINE GENERATOR ---
-// ==========================================
+// --- HYPER-STRICT SAFE DATA CLEANERS ---
 const cleanDesc = (d) => String(d || '').replace(/\s+/g, ' ').trim().toUpperCase();
 const normalizeString = (str) => String(str || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
 
+// --- M-DATE OFFLINE SEQUENCE GENERATOR ---
 const getOfflineSequence = (prefix) => {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -71,22 +81,33 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false); 
   const [workerName, setWorkerName] = useState('');
   const [loginError, setLoginError] = useState('');
+  
   const [isProcessing, setIsProcessing] = useState(false);
+
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [offlineQueue, setOfflineQueue] = useState(() => { try { const saved = localStorage.getItem('god_offline_queue'); return saved ? JSON.parse(saved) : []; } catch(e) { return []; } });
+  const [offlineQueue, setOfflineQueue] = useState(() => {
+    try {
+        const saved = localStorage.getItem('god_offline_queue');
+        return saved ? JSON.parse(saved) : [];
+    } catch(e) { return []; }
+  });
   const [isSyncing, setIsSyncing] = useState(false);
+
   const [view, setView] = useState(''); 
   const [masterItems, setMasterItems] = useState([]);
   const [highlightIndex, setHighlightIndex] = useState(-1);
   const [uploadStatus, setUploadStatus] = useState('WAITING UPLOAD');
   const [ledgerData, setLedgerData] = useState([]);
+  
   const [ledgerLimit, setLedgerLimit] = useState(50);
   const [ledgerMonth, setLedgerMonth] = useState(new Date().getMonth());
   const [ledgerYear, setLedgerYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState([new Date().getFullYear()]);
   const [availableMonths, setAvailableMonths] = useState([new Date().getMonth()]);
+  
   const [openNoteId, setOpenNoteId] = useState(null);
   const [tempNoteText, setTempNoteText] = useState("");
+  
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [depotMode, setDepotMode] = useState('DISPATCH'); 
@@ -115,6 +136,7 @@ export default function App() {
   const [verifyModal, setVerifyModal] = useState(null);
   const [editPOModal, setEditPOModal] = useState(null);
   const [processReturnModal, setProcessReturnModal] = useState(null);
+
   const [deleteModal, setDeleteModal] = useState(null);
   const [masterEditModal, setMasterEditModal] = useState(null);
   const [settingsModal, setSettingsModal] = useState(false);
@@ -123,55 +145,82 @@ export default function App() {
   const [actionableCount, setActionableCount] = useState(0);
   const [toasts, setToasts] = useState([]);
   
-  // ==========================================
-  // --- NATIVE NOTIFICATION ENGINE ---
-  // ==========================================
+  // --- ROBUST NOTIFICATION ENGINE ---
   const triggerSystemAlert = (title, body, type = 'success') => {
-    const id = Date.now(); setToasts(prev => [...prev, { id, title, body, type }]);
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, title, body, type }]);
     setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 4000);
+
     playChime();
+    triggerHaptic([50, 50, 100]);
+
     try {
       if ("Notification" in window && Notification.permission === "granted") {
-        if ('serviceWorker' in navigator) {
+        if (navigator.serviceWorker) {
           navigator.serviceWorker.ready.then(reg => {
-            if (reg) { reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png', vibrate: [200, 100, 200] }); } 
-            else { new Notification(title, { body: body, icon: '/pwa-512x512.png' }); }
-          }).catch(() => { new Notification(title, { body: body, icon: '/pwa-512x512.png' }); });
-        } else { new Notification(title, { body: body, icon: '/pwa-512x512.png' }); }
+            reg.showNotification(title, { body: body, icon: '/pwa-512x512.png', badge: '/pwa-512x512.png' });
+          }).catch(() => {
+            new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+          });
+        } else {
+          new Notification(title, { body: body, icon: '/pwa-512x512.png' });
+        }
       }
-    } catch(e) {}
+    } catch(e) { /* Safe fallback */ }
   };
 
-  const depotSearchRef = useRef(null); const depotQtyRef = useRef(null);
-  const retailSearchRef = useRef(null); const retailQtyRef = useRef(null);
+  const depotSearchRef = useRef(null);
+  const depotQtyRef = useRef(null);
+  const retailSearchRef = useRef(null);
+  const retailQtyRef = useRef(null);
+
   const monthNames = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUG", "SEPT", "OCT", "NOV", "DEC"];
 
-  // ==========================================
-  // --- LIFECYCLE & SYNC ---
-  // ==========================================
-  useEffect(() => { const timer = setTimeout(() => { if(loadingAuth) setLoadingAuth(false); }, 6000); return () => clearTimeout(timer); }, [loadingAuth]);
+  // WATCHDOG TIMER
+  useEffect(() => {
+    const timer = setTimeout(() => {
+       if(loadingAuth) setLoadingAuth(false);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [loadingAuth]);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true); const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline);
-    window.addEventListener('click', initAudio, { once: true }); window.addEventListener('touchstart', initAudio, { once: true }); window.addEventListener('keydown', initAudio, { once: true });
-    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('click', initAudio, { once: true });
+    window.addEventListener('touchstart', initAudio, { once: true });
+    window.addEventListener('keydown', initAudio, { once: true });
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
-  useEffect(() => { localStorage.setItem('god_offline_queue', JSON.stringify(offlineQueue)); if (isOnline && offlineQueue.length > 0) syncOfflineQueue(); }, [offlineQueue, isOnline]);
+  useEffect(() => {
+    localStorage.setItem('god_offline_queue', JSON.stringify(offlineQueue));
+    if (isOnline && offlineQueue.length > 0) syncOfflineQueue();
+  }, [offlineQueue, isOnline]);
 
   useEffect(() => {
     if (isOnline && session) {
       const fetchMonths = async () => {
         try {
-            const startDate = new Date(ledgerYear, 0, 1).toISOString(); const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
+            const startDate = new Date(ledgerYear, 0, 1).toISOString();
+            const endDate = new Date(ledgerYear, 11, 31, 23, 59, 59, 999).toISOString();
             const { data } = await supabase.from('transactions').select('timestamp').gte('timestamp', startDate).lte('timestamp', endDate);
             if (data && data.length > 0) {
                 const months = [...new Set(data.map(d => new Date(d.timestamp).getMonth()))].sort((a,b) => b - a);
-                setAvailableMonths(months); if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
-            } else { setAvailableMonths([new Date().getMonth()]); }
-        } catch(e) {}
-      }; fetchMonths();
+                setAvailableMonths(months);
+                if (!months.includes(ledgerMonth)) setLedgerMonth(months[0]);
+            } else {
+                setAvailableMonths([new Date().getMonth()]);
+            }
+        } catch(e) { /* fail silently */ }
+      };
+      fetchMonths();
     }
   }, [ledgerYear, isOnline, session]);
 
@@ -181,18 +230,35 @@ export default function App() {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
-        if (session) { setSession(session); await fetchRole(session.user.id); } else { setLoadingAuth(false); }
+        if (session) {
+          setSession(session);
+          await fetchRole(session.user.id);
+        } else {
+          setLoadingAuth(false);
+        }
       } catch (err) { setLoadingAuth(false); }
     };
+    
     initializeAuth();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') { setSession(null); setUserRole(null); setView(''); setLoadingAuth(false); } 
-      else if (session) { setSession(session); fetchRole(session.user.id); }
+      if (event === 'SIGNED_OUT') {
+        setSession(null); setUserRole(null); setView(''); setLoadingAuth(false);
+      } else if (session) {
+        setSession(session); fetchRole(session.user.id);
+      }
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => { const isDesktop = window.innerWidth > 768; if (isDesktop) { if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100); if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100); } }, [view, depotMode, retailMode]);
+  useEffect(() => {
+    const isDesktop = window.innerWidth > 768;
+    if (isDesktop) {
+      if (view === 'depot') setTimeout(() => depotSearchRef.current?.focus(), 100);
+      if (view === 'retail') setTimeout(() => retailSearchRef.current?.focus(), 100);
+    }
+  }, [view, depotMode, retailMode]);
 
   async function fetchRole(userId) {
     try {
@@ -200,42 +266,61 @@ export default function App() {
       if (error) throw error;
       if (data) {
         const currentRole = data.role ? String(data.role).toLowerCase().trim() : 'unassigned';
-        setUserRole(currentRole); fetchAvailableYears();
+        setUserRole(currentRole);
+        fetchAvailableYears();
         
-        // Replace the OneSignal block inside fetchRole and handleLogin with this:
-try {
-    if (window.OneSignalDeferred) {
-      window.OneSignalDeferred.push(async function(OneSignal) {
-        if(OneSignal.User) { 
-           OneSignal.User.PushSubscription.optIn(); 
-           OneSignal.User.addTag("role", currentRole); 
-        }
-      });
-    }
-} catch(e) {}
+        // Register Push Notification Tags properly
+        try {
+            if (window.OneSignalDeferred) {
+              window.OneSignalDeferred.push(async function(OneSignal) {
+                if (OneSignal.User) {
+                  OneSignal.User.PushSubscription.optIn();
+                  OneSignal.User.addTag("role", currentRole);
+                }
+              });
+            }
+        } catch(e) {}
 
         if (currentRole === 'master' || currentRole === 'admin') setView('ledger'); 
         else if (currentRole === 'retail') setView('retail'); 
         else if (currentRole === 'depot') setView('depot'); 
         else setView('unassigned'); 
-      } else { setView('unassigned'); }
-    } catch (err) { setView('unassigned'); } finally { setLoadingAuth(false); }
+      } else {
+        setView('unassigned');
+      }
+    } catch (err) {
+        setView('unassigned');
+    } finally { setLoadingAuth(false); }
   }
 
   async function handleLogin(e) {
-    e.preventDefault(); triggerHaptic([30, 50]); initAudio(); 
+    e.preventDefault(); 
+    triggerHaptic([30, 50]);
+    initAudio(); 
     
-    // FORCE PERMISSION CHECK ON CLICK
-    if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
-        try { Notification.requestPermission(); } catch(err) { }
-    }
-
     if (!isOnline) { setLoginError("Internet required for initial login."); return; }
     setLoginError(''); setIsLoggingIn(true); 
     const hiddenEmail = `${workerName.trim().toLowerCase()}@god.com.in`;
     const { data, error } = await supabase.auth.signInWithPassword({ email: hiddenEmail, password: "123456" });
     if (error) { setLoginError(`System Error: ${error.message}`); setIsLoggingIn(false); return; }
-    if (data?.user) { await fetchRole(data.user.id); }
+    
+    if (data?.user) {
+      await fetchRole(data.user.id);
+      
+      // FORCED ANDROID PWA PERMISSION PROMPT ON LOGIN
+      try {
+          if (window.OneSignalDeferred) {
+            window.OneSignalDeferred.push(async function(OneSignal) {
+              await OneSignal.init({
+                appId: "983ab91e-4cd8-4874-b1d1-6c43613c2614", 
+                safari_web_id: "web.onesignal.auto.528b6caf-1e6b-4608-b4e6-faa03f146a9c", 
+                notifyButton: { enable: false },
+              });
+              await OneSignal.Slidedown.promptPush(); // Forces the native Android/iOS permission prompt
+            });
+          }
+      } catch(e) {}
+    }
     setIsLoggingIn(false);
   }
 
@@ -245,7 +330,8 @@ try {
       const { data } = await supabase.from('transactions').select('timestamp').order('timestamp', { ascending: true }).limit(1);
       const currentYear = new Date().getFullYear();
       if (data && data.length > 0) {
-        const firstYear = new Date(data[0].timestamp).getFullYear(); const years = []; for (let i = firstYear; i <= currentYear; i++) years.push(i);
+        const firstYear = new Date(data[0].timestamp).getFullYear();
+        const years = []; for (let i = firstYear; i <= currentYear; i++) years.push(i);
         setAvailableYears(years.reverse());
       } else { setAvailableYears([currentYear]); }
     } catch(e) {}
@@ -257,14 +343,26 @@ try {
       const { data, error } = await supabase.from('master_items').select('*');
       if (error) throw error;
       if (data && data.length > 0) {
-        const optimizedData = data.map(item => ({ ...item, search_target: `${normalizeString(item.description)} ${normalizeString(item.sku)}` }));
-        setMasterItems(optimizedData); setUploadStatus(`${data.length} SKUs AVAILABLE`); localStorage.setItem('god_cached_items', JSON.stringify(optimizedData));
+        const optimizedData = data.map(item => ({
+            ...item,
+            search_target: `${normalizeString(item.description)} ${normalizeString(item.sku)}`
+        }));
+        setMasterItems(optimizedData); setUploadStatus(`${data.length} SKUs AVAILABLE`); 
+        localStorage.setItem('god_cached_items', JSON.stringify(optimizedData));
       } else {
-        try { const cached = localStorage.getItem('god_cached_items'); if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); } else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); } } catch(e) { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
+        try {
+            const cached = localStorage.getItem('god_cached_items');
+            if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
+            else { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
+        } catch(e) { setMasterItems([]); setUploadStatus('WAITING UPLOAD'); }
       }
-    } catch (err) { try { const cached = localStorage.getItem('god_cached_items'); if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); } } catch(e) {} }
+    } catch (err) {
+      try {
+          const cached = localStorage.getItem('god_cached_items');
+          if (cached) { setMasterItems(JSON.parse(cached)); setUploadStatus('OFFLINE CACHE ACTIVE'); }
+      } catch(e) {}
+    }
   };
-
   const fetchPendingData = async () => {
     if(!isOnline) return;
     try {
@@ -277,30 +375,45 @@ try {
         if (dispRes.data) setIncomingDeliveries(dispRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
         if (retReqRes.data) setPendingDepotReturns(retReqRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
         if (retInitRes.data) setPendingReturns(retInitRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
-    } catch(e) {}
+    } catch(e) { /* silent fail */ }
   };
 
   const fetchLedgerData = async () => {
     if (!session || !isOnline) return;
     try {
-        const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString(); const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
+        const startDate = new Date(ledgerYear, ledgerMonth, 1).toISOString();
+        const endDate = new Date(ledgerYear, ledgerMonth + 1, 0, 23, 59, 59, 999).toISOString();
         const { data } = await supabase.from('transactions').select('*').in('status', ['ACCEPTED', 'DISPATCHED', 'RETURN_ACCEPTED', 'DELETED']).gte('timestamp', startDate).lte('timestamp', endDate).order('timestamp', { ascending: false }).limit(ledgerLimit);
         if (data) setLedgerData(data);
-    } catch(e) {}
+    } catch(e) { /* silent fail */ }
   };
 
-  const refreshAllData = async () => { if (!session) return; await Promise.all([ fetchMasterItems(), fetchPendingData(), fetchLedgerData() ]); };
-  useEffect(() => { refreshAllData(); }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
+  const refreshAllData = async () => {
+      if (!session) return;
+      await fetchMasterItems();
+      await fetchPendingData();
+      await fetchLedgerData();
+  };
+
+  useEffect(() => {
+      refreshAllData();
+  }, [session, ledgerMonth, ledgerYear, ledgerLimit]);
 
   useEffect(() => {
     let count = 0;
     if (userRole === 'depot') count = Object.keys(pendingPOs).length + Object.keys(pendingReturns).length;
     else if (userRole === 'retail') count = Object.keys(incomingDeliveries).length + Object.keys(pendingDepotReturns).length;
     else if (userRole === 'admin' || userRole === 'master') count = Object.keys(pendingPOs).length + Object.keys(pendingDepotReturns).length + Object.keys(incomingDeliveries).length + Object.keys(pendingReturns).length;
+    
     setActionableCount(count);
-    if (navigator.setAppBadge) { if (count > 0) navigator.setAppBadge(count).catch(() => {}); else navigator.clearAppBadge().catch(() => {}); }
+    
+    if (navigator.setAppBadge) {
+      if (count > 0) navigator.setAppBadge(count).catch(() => {});
+      else navigator.clearAppBadge().catch(() => {});
+    }
   }, [pendingPOs, pendingDepotReturns, incomingDeliveries, pendingReturns, userRole]);
 
+  // FULL CHANNEL LISTENER FOR ALL TOAST POPUPS
   useEffect(() => {
     if (!session || !userRole || !isOnline) return;
     const channel = supabase.channel('realtime-system').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
@@ -323,7 +436,8 @@ try {
         }).subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, userRole, isOnline]);
-// ==========================================
+
+  // ==========================================
   // --- DATABASE EXECUTORS ---
   // ==========================================
   const syncOfflineQueue = async () => {
@@ -382,6 +496,10 @@ try {
   };
 
   const saveSettings = (e) => { e.preventDefault(); localStorage.setItem('god_emg_url', emergencyUrl); setSettingsModal(false); triggerSystemAlert("Settings Saved", "Emergency URL updated successfully.", "success"); };
+  
+  // ==========================================
+  // --- FORMATTERS & HELPERS ---
+  // ==========================================
   const formatDate = (dateInput) => { const d = dateInput ? new Date(dateInput) : new Date(); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`; };
   const formatTime = (dateInput) => { const d = dateInput ? new Date(dateInput) : new Date(); let hours = d.getHours(); let minutes = d.getMinutes(); const ampm = hours >= 12 ? 'PM' : 'AM'; hours = hours % 12 || 12; minutes = minutes < 10 ? '0' + minutes : minutes; return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`; };
   const isWithin30Days = (dateStr) => { const txDate = new Date(dateStr); const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30); return txDate >= thirtyDaysAgo; };
@@ -417,62 +535,37 @@ try {
   const depotFilteredItems = useMemo(() => smartSearch(searchQuery), [searchQuery, masterItems]);
   const retailFilteredItems = useMemo(() => smartSearch(retailSearch), [retailSearch, masterItems]);
 
+  // ==========================================
+  // --- PDF GENERATOR (PRE-PRINTED GRID - CLASSIC) ---
+  // ==========================================
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
     const isReturn = String(challanNo).startsWith('RT');
     const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
-    
     let totalNos = 0;
     
     const drawPageHeaders = () => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
         
-        // Header Background
-        doc.setFillColor(235, 235, 235); 
-        doc.rect(5, 5, 138, 16, 'F'); 
-        doc.rect(5, 5, 138, 16, 'S'); 
+        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
         
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
-        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); 
-        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        
-        // Metadata
-        doc.setFontSize(9);
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setFontSize(9); doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // Table Header
-        doc.setFillColor(245, 245, 245); 
-        doc.rect(5, 41, 138, 7, 'F'); 
-        doc.rect(5, 41, 138, 7, 'S'); 
-
-        // Column Labels
+        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); 
-        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
-        doc.text("NOS", 115, 46, { align: "center" }); 
-        doc.text("QTY", 134, 46, { align: "center" });
+        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
         doc.setFont("helvetica", "normal");
     };
 
     const drawPageGrid = (endY) => {
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        
-        // Master Outer Borders
-        doc.line(5, 48, 5, endY); 
-        doc.line(143, 48, 143, endY); 
-        
-        // Vertical Grid Lines
-        doc.line(15, 48, 15, endY);   // SR
-        doc.line(105, 48, 105, endY); // Desc
-        doc.line(125, 48, 125, endY); // NOS
-        
-        // Bottom Closure Line
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
+        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
         doc.line(5, endY, 143, endY); 
     };
 
@@ -498,73 +591,35 @@ try {
       const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
       const rowHeight = (splitDesc.length * 4) + 1;
       
-      // Page Break Engine (Classic)
       if (y + rowHeight > maxY) {
-          drawPageGrid(y); // Close grid for current page
-          
-          // Signature box at bottom of current page
+          drawPageGrid(y);
           const sigY = y + 15;
           drawSignatures(sigY);
-          doc.line(5, y, 5, sigY + 7);
-          doc.line(143, y, 143, sigY + 7);
-          doc.line(5, sigY + 7, 143, sigY + 7);
-
+          doc.line(5, y, 5, sigY + 7); doc.line(143, y, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
+          
           doc.addPage();
           drawPageHeaders();
           y = 53;
       }
 
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
-      doc.text(splitDesc, 17, y); 
-      doc.setFont("helvetica", "bold"); 
-      doc.text(paddedQty, 115, y, { align: "center" }); 
-      doc.setFontSize(8); 
-      doc.text(displayStr, 134, y, { align: "center" });
-      doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      
-      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
-        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
-        doc.setDrawColor(0, 0, 0); 
-      }
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" }); doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); }
       y += rowHeight + 2; 
     });
 
-    // LAST PAGE CLOSURE
     drawPageGrid(y);
-
-    // TOTAL BOX (Only prints after the final item)
-    doc.setFillColor(235, 235, 235); 
-    doc.rect(5, y, 100, 7, 'F'); 
-    doc.rect(105, y, 38, 7, 'F'); 
-    doc.rect(5, y, 138, 7, 'S'); 
-    doc.line(105, y, 105, y + 7); 
-
-    doc.setFont("helvetica", "bold");
-    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
-    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
-    
-    // SIGNATURES ON LAST PAGE
-    const sigY = y + 20;
-    drawSignatures(sigY);
-
-    // Close signature box
-    doc.line(5, y + 7, 5, sigY + 7);
-    doc.line(143, y + 7, 143, sigY + 7);
-    doc.line(5, sigY + 7, 143, sigY + 7);
-
-    // AUTOMATED PAGINATION (Page 1 of X)
+    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
+    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    const sigY = y + 20; drawSignatures(sigY);
+    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
     const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
-        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
-    }
-
+    for (let i = 1; i <= totalPages; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" }); }
     doc.save(`${challanNo}.pdf`);
   };
 
+  // ==========================================
+  // --- EXCEL EXPORTER ---
+  // ==========================================
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]; if (!file) return; setUploadStatus('Processing...'); const reader = new FileReader();
     reader.onload = async (e) => {
@@ -644,6 +699,9 @@ try {
     const blob = new Blob([htmlArray.join('')], { type: "application/vnd.ms-excel" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `eChallan ${formatDate().replace(/\//g, '.')}.xls`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
+  // ==========================================
+  // --- ACTIONS (CART & MODALS) ---
+  // ==========================================
   const handleItemSelect = (item, setItemState, setUnitState, setSearchState, setDropdownState, searchQueryStr, focusRef) => {
     setItemState(item); setSearchState(item?.description || ''); let newUnit = getUnit(item?.description); setUnitState(newUnit);
     if (item?.category === 'TVS') { try{const learnedUnits = JSON.parse(localStorage.getItem('god_tvs_units') || '{}'); learnedUnits[normalizeString(item.description)] = newUnit; localStorage.setItem('god_tvs_units', JSON.stringify(learnedUnits));}catch(e){} }
@@ -774,6 +832,9 @@ try {
     } catch(err) { triggerSystemAlert("Error", err.message, "error"); } finally { setIsProcessing(false); }
   };
 
+  // ==========================================
+  // --- UI RENDERING ---
+  // ==========================================
   if (loadingAuth) return (
     <div className="min-h-screen bg-gray-200 flex items-center justify-center font-sans select-none">
       <div className="bg-white p-6 md:p-8 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-center">
@@ -801,7 +862,6 @@ try {
 
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
-      
       <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black font-bold uppercase text-sm animate-slide-in flex items-center gap-3 w-72 bg-white text-black`}>
@@ -834,7 +894,7 @@ try {
                 <div className="flex flex-col gap-3">
                     <button onClick={() => executeDelete('SOFT')} disabled={isProcessing} className="w-full bg-gray-200 border-2 border-black p-3 text-left hover:bg-gray-300 transition-colors disabled:opacity-50">
                         <span className="block text-black font-black text-sm">1. VOID (Soft Delete)</span>
-                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the sequence number.</span>
+                        <span className="block text-[11px] md:text-xs font-bold text-gray-600 mt-1 uppercase">Zeroes quantities but keeps the sequence number in the ledger for auditing transparency.</span>
                     </button>
                     <button onClick={() => executeDelete('HARD')} disabled={isProcessing} className="w-full bg-red-100 border-2 border-red-900 p-3 text-left hover:bg-red-200 transition-colors disabled:opacity-50">
                         <span className="block text-red-900 font-black text-sm">2. WIPE COMPLETELY (Hard Delete)</span>
@@ -850,26 +910,23 @@ try {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
-              <div className="space-y-3 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
-                <div className="hidden sm:flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-64 overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
-                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-gray-100 border border-gray-300 p-3 rounded">
+                  <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
                         const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], item_desc: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="w-full sm:flex-1 text-[13px] md:text-sm p-2 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
-                    <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto mt-1 sm:mt-0">
-                       <span className="text-[11px] font-bold text-gray-500 uppercase sm:hidden">Quantity:</span>
-                       <input type="number" value={item.edit_qty} onChange={(e) => {
-                          const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
-                       }} className="w-24 text-[13px] md:text-sm p-2 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
-                    </div>
+                    }} className="flex-1 min-w-0 text-[11px] md:text-[13px] p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => {
+                        const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
+                    }} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
-                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m?.description} />)}</datalist>
+                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m.description} />)}</datalist>
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
-                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
+                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
+                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
               </div>
             </div>
         </div>
@@ -879,21 +936,21 @@ try {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-lg w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
                 <h2 className="text-lg font-bold border-b-2 border-black pb-2 mb-4 uppercase text-blue-800">VERIFY GOODS: {verifyModal.challanNo}</h2>
-                <div className="space-y-2 mb-4 max-h-[60vh] overflow-y-auto pr-2">
+                <div className="space-y-2 mb-4 max-h-72 overflow-y-auto pr-2">
                   <div className="flex text-[11px] font-bold text-gray-500 px-2 uppercase"><span className="w-8 text-center">CHK</span><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 md:w-24 text-center">RCVD QTY</span></div>
                   {verifyModal.items.map((item, idx) => (
                     <label key={idx} className={`flex items-center space-x-2 md:space-x-3 p-2 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                      <div className="w-8 flex justify-center"><input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-6 h-6 cursor-pointer accent-blue-600" /></div>
-                      <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                      <div className="w-8 flex justify-center"><input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600" /></div>
+                      <span className="flex-1 text-[11px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
                       <input type="number" value={item.edit_qty} onClick={(e) => e.stopPropagation()} onChange={(e) => {
                               const updated = [...verifyModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setVerifyModal({ ...verifyModal, items: updated });
-                          }} className="w-20 md:w-24 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
+                          }} className="w-16 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                     </label>
                   ))}
                 </div>
                 <div className="flex space-x-3">
-                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
-                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
+                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
+                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
                 </div>
             </div>
         </div>
@@ -903,19 +960,19 @@ try {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">REVIEW & DISPATCH: {editPOModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {editPOModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
+                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
               </div>
             </div>
         </div>
@@ -925,19 +982,19 @@ try {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="text-lg font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-red-800">PROCESS DEPOT REQUEST: {processReturnModal.groupId}</h2>
-              <div className="space-y-2 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
+              <div className="space-y-2 mb-4 md:mb-6 max-h-72 overflow-y-auto pr-2">
                 <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-16 text-center">REQ</span><span className="w-20 text-center">DISPATCH</span></div>
                 {processReturnModal.items.map((item, idx) => (
                   <div key={idx} className="flex items-center gap-2 bg-red-50 border border-red-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
+                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
               </div>
             </div>
         </div>
@@ -971,15 +1028,15 @@ try {
             {userRole && (
               <div className="p-1 flex flex-nowrap gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold border border-black rounded shadow-sm hover:bg-red-700 transition-colors flex-shrink-0">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm font-bold border border-black rounded shadow-sm hover:bg-red-700 transition-colors flex-shrink-0">LOGOUT</button>
           </div>
         </div>
       </nav>
