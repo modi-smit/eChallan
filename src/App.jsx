@@ -419,123 +419,148 @@ try {
 
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
-    const isReturn = String(challanNo).startsWith('RT'); 
-    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); 
+    const isReturn = String(challanNo).startsWith('RT');
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
+    
     let totalNos = 0;
     
-    // --- DRAW FIXED HEADER ---
-    const drawTemplate = (isLastPage) => {
-        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+    const drawPageHeaders = () => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
         
-        // Header Fill
-        doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        // Header Background
+        doc.setFillColor(235, 235, 235); 
+        doc.rect(5, 5, 138, 16, 'F'); 
+        doc.rect(5, 5, 138, 16, 'S'); 
+        
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
         doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); 
         doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
-        doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
         
         // Metadata
-        doc.setFontSize(9); 
+        doc.setFontSize(9);
         doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
         
-        // Table Header Row
-        doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
-        
-        // --- DRAW FIXED GRID LINES (Always Y=48 to Y=175) ---
-        const gridBottom = isLastPage ? 168 : 175; // Leave 7mm gap for Total Box on last page
-        doc.line(5, 48, 5, 175);     // Outer Left
-        doc.line(143, 48, 143, 175); // Outer Right
-        doc.line(15, 48, 15, gridBottom);   // Col 1
-        doc.line(105, 48, 105, gridBottom); // Col 2
-        doc.line(125, 48, 125, gridBottom); // Col 3
-        
-        // Close bottom of grid
-        if (!isLastPage) {
-            doc.line(5, 175, 143, 175); 
-        } else {
-            // Draw TOTAL Box strictly at bottom of grid
-            doc.line(5, 168, 143, 168); // Top of total box
-            doc.setFillColor(235, 235, 235); doc.rect(5, 168, 100, 7, 'F'); doc.rect(105, 168, 38, 7, 'F'); doc.rect(5, 168, 138, 7, 'S');
-            doc.line(105, 168, 105, 175); // Inner border
-            doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("TOTAL", 100, 173, { align: "right" }); 
-            doc.text(String(totalNos).padStart(2, '0'), 115, 173, { align: "center" });
-        }
+        // Table Header
+        doc.setFillColor(245, 245, 245); 
+        doc.rect(5, 41, 138, 7, 'F'); 
+        doc.rect(5, 41, 138, 7, 'S'); 
 
-        // --- DRAW FIXED SIGNATURE BLOCK (Always Y=178 to Y=200) ---
-        doc.rect(5, 178, 138, 22, 'S'); 
-        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, 183);
-        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, 191); 
-          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, 197);
-        }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, 183, { align: "right" });
-        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, 191, { align: "right" });
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, 197, { align: "right" });
+        // Column Labels
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+        doc.text("SR", 10, 46, { align: "center" }); 
+        doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); 
+        doc.text("NOS", 115, 46, { align: "center" }); 
+        doc.text("QTY", 134, 46, { align: "center" });
+        doc.setFont("helvetica", "normal");
     };
 
-    // --- PRE-CALCULATE PAGES TO PREVENT OVERFLOW ---
-    const pages = [[]];
-    let currentY = 53;
-    const contentMaxY = 165; // Hard limit before hitting the TOTAL box/Signatures
+    const drawPageGrid = (endY) => {
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        
+        // Master Outer Borders
+        doc.line(5, 48, 5, endY); 
+        doc.line(143, 48, 143, endY); 
+        
+        // Vertical Grid Lines
+        doc.line(15, 48, 15, endY);   // SR
+        doc.line(105, 48, 105, endY); // Desc
+        doc.line(125, 48, 125, endY); // NOS
+        
+        // Bottom Closure Line
+        doc.line(5, endY, 143, endY); 
+    };
 
-    itemsList.forEach((item) => {
+    const drawSignatures = (sigY) => {
+        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
+        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
+          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, sigY - 4); 
+          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, sigY + 2);
+        }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, sigY - 5, { align: "right" });
+        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, sigY, { align: "right" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
+    };
+
+    drawPageHeaders();
+    let y = 53;
+    const maxY = 165; 
+
+    itemsList.forEach((item, index) => {
       const desc = String(item?.description || item?.item_desc || ''); 
       const splitDesc = doc.splitTextToSize(desc, 85); 
-      const rowHeight = (splitDesc.length * 4) + 2; 
-      totalNos += parseInt(item.disp_qty || item.req_qty) || 0;
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
+      const rowHeight = (splitDesc.length * 4) + 1;
+      
+      // Page Break Engine (Classic)
+      if (y + rowHeight > maxY) {
+          drawPageGrid(y); // Close grid for current page
+          
+          // Signature box at bottom of current page
+          const sigY = y + 15;
+          drawSignatures(sigY);
+          doc.line(5, y, 5, sigY + 7);
+          doc.line(143, y, 143, sigY + 7);
+          doc.line(5, sigY + 7, 143, sigY + 7);
 
-      if (currentY + rowHeight > contentMaxY) {
-          pages.push([]); // Create new page
-          currentY = 53;  // Reset Y
+          doc.addPage();
+          drawPageHeaders();
+          y = 53;
       }
-      pages[pages.length - 1].push({ item, splitDesc, rowHeight });
-      currentY += rowHeight;
+
+      doc.text(`${index + 1}`, 10, y, { align: "center" }); 
+      doc.text(splitDesc, 17, y); 
+      doc.setFont("helvetica", "bold"); 
+      doc.text(paddedQty, 115, y, { align: "center" }); 
+      doc.setFontSize(8); 
+      doc.text(displayStr, 134, y, { align: "center" });
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      
+      if (index < itemsList.length - 1 && y + rowHeight < maxY) { 
+        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); 
+        doc.setDrawColor(0, 0, 0); 
+      }
+      y += rowHeight + 2; 
     });
 
-    // --- RENDER PAGES ---
-    pages.forEach((pageItems, pageIndex) => {
-        if (pageIndex > 0) doc.addPage();
-        const isLastPage = pageIndex === pages.length - 1;
-        drawTemplate(isLastPage); // Draws the Grid, Signatures, and Total Box dynamically
-        
-        let y = 53;
-        pageItems.forEach((row, i) => {
-            const { item, splitDesc, rowHeight } = row;
-            
-            // Accurate SR Numbering across multiple pages
-            let globalIndex = 0;
-            for(let prev=0; prev<pageIndex; prev++) globalIndex += pages[prev].length;
-            globalIndex += (i + 1);
+    // LAST PAGE CLOSURE
+    drawPageGrid(y);
 
-            const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; 
-            const displayStr = String(getDisplayQty(item.item_desc, rawQty, item.unit || getUnit(item.item_desc))); 
-            const paddedQty = String(rawQty).padStart(2, '0');
+    // TOTAL BOX (Only prints after the final item)
+    doc.setFillColor(235, 235, 235); 
+    doc.rect(5, y, 100, 7, 'F'); 
+    doc.rect(105, y, 38, 7, 'F'); 
+    doc.rect(5, y, 138, 7, 'S'); 
+    doc.line(105, y, 105, y + 7); 
 
-            doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-            doc.text(`${globalIndex}`, 10, y + 3, { align: "center" }); 
-            doc.text(splitDesc, 17, y + 3); 
-            doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y + 3, { align: "center" }); 
-            doc.setFontSize(8); doc.text(displayStr, 134, y + 3, { align: "center" });
-            
-            y += rowHeight;
-            
-            // Item separator line (Don't draw if it's the last item on the page)
-            if (i < pageItems.length - 1) {
-                doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
-                doc.line(5.2, y, 142.8, y); 
-                doc.setDrawColor(0, 0, 0); 
-            }
-        });
+    doc.setFont("helvetica", "bold");
+    doc.text("TOTAL", 100, y + 5, { align: "right" }); 
+    doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
+    
+    // SIGNATURES ON LAST PAGE
+    const sigY = y + 20;
+    drawSignatures(sigY);
 
-        // Add Pagination at very bottom
-        doc.setFont("helvetica", "normal"); doc.setFontSize(8); 
-        doc.text(`Page ${pageIndex + 1} of ${pages.length}`, 140, 206, { align: "right" }); 
-    });
+    // Close signature box
+    doc.line(5, y + 7, 5, sigY + 7);
+    doc.line(143, y + 7, 143, sigY + 7);
+    doc.line(5, sigY + 7, 143, sigY + 7);
+
+    // AUTOMATED PAGINATION (Page 1 of X)
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" });
+    }
 
     doc.save(`${challanNo}.pdf`);
   };
@@ -918,16 +943,18 @@ try {
         </div>
       )}
 
-      {/* --- RESPONSIVE MOBILE NAVBAR (SINGLE LINE FIXED) --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-3 sticky top-0 z-50 shadow-sm flex items-center justify-between">
-        <div className="flex items-center gap-2 flex-shrink-0">
-            <span className="tracking-widest hidden sm:inline font-bold">GUJARAT OIL DEPOT</span>
-            <span className="tracking-widest sm:hidden font-bold text-lg">GOD</span>
+      {/* --- RESPONSIVE MOBILE NAVBAR (STRICT 1-LINE SCROLLABLE) --- */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-2 md:p-3 sticky top-0 z-50 shadow-sm">
+        <div className="container mx-auto flex flex-nowrap items-center justify-between gap-3 w-full font-bold uppercase overflow-x-auto hide-scrollbar">
+          
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="tracking-widest hidden md:inline text-sm">GUJARAT OIL DEPOT</span>
+            <span className="tracking-widest md:hidden text-base">GOD</span>
             <button onClick={() => {
                 triggerHaptic(50);
                 if (emergencyUrl) window.open(emergencyUrl, '_blank');
-                else alert("Emergency URL not set. Ask Master to configure Settings.");
-            }} className="ml-2 hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Fallback Portal">🚨</button>
+                else alert("Emergency URL not set.");
+            }} className="hover:scale-110 transition-transform text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Portal">🚨</button>
             {actionableCount > 0 && (
               <span className="relative flex h-3 w-3 -ml-1 -mt-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -936,23 +963,24 @@ try {
             )}
             {!isOnline && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 rounded text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="text-gray-400 hover:text-white transition-colors text-xl sm:ml-4" title="System Settings">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="text-gray-400 hover:text-white transition-colors text-xl ml-2" title="System Settings">⚙️</button>
             )}
-        </div>
-        
-        <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pl-2 flex-nowrap">
+          </div>
+          
+          <div className="flex items-center gap-2 flex-shrink-0">
             {userRole && (
-              <div className="p-1 flex flex-row gap-1 rounded bg-gray-700 flex-nowrap flex-shrink-0">
+              <div className="p-1 flex flex-nowrap gap-1 rounded bg-gray-700">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-4 py-2 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-4 py-2 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-4 py-2 text-xs sm:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold rounded shadow-sm transition-colors whitespace-nowrap ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-4 py-2 text-xs sm:text-sm font-bold border border-black rounded shadow-sm hover:bg-red-700 transition-colors flex-shrink-0">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-3 py-1.5 md:px-4 md:py-2.5 text-xs md:text-sm font-bold border border-black rounded shadow-sm hover:bg-red-700 transition-colors flex-shrink-0">LOGOUT</button>
+          </div>
         </div>
       </nav>
 
