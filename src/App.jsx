@@ -415,26 +415,37 @@ export default function App() {
   const retailFilteredItems = useMemo(() => smartSearch(retailSearch), [retailSearch, masterItems]);
 
   const printPDF = (challanNo, itemsList) => {
-    const doc = new jsPDF({ format: 'a5' }); const isReturn = String(challanNo).startsWith('RT'); const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); let totalNos = 0;
+    const doc = new jsPDF({ format: 'a5' }); 
+    const isReturn = String(challanNo).startsWith('RT'); 
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); 
+    let totalNos = 0;
+    
     const drawPageHeaders = () => {
         doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
         doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
-        doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
+        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setFontSize(10); 
+        doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
-        doc.setFontSize(9); doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        
+        doc.setFontSize(9); 
+        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
+        
         doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
-        doc.setFont("helvetica", "normal");
     };
-    const drawPageGrid = (endY) => {
+
+    const drawGridLines = (endY) => {
         doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
         doc.line(5, 48, 5, endY); doc.line(143, 48, 143, endY); 
-        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); doc.line(5, endY, 143, endY); 
+        doc.line(15, 48, 15, endY); doc.line(105, 48, 105, endY); doc.line(125, 48, 125, endY); 
+        doc.line(5, endY, 143, endY); 
     };
+
     const drawSignatures = (sigY) => {
         doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, sigY);
         if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
@@ -446,30 +457,73 @@ export default function App() {
         doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, sigY + 3, { align: "right" });
     };
 
-    drawPageHeaders(); let y = 53; const maxY = 165; 
+    drawPageHeaders(); 
+    let currentY = 53; 
+    const pageMaxY = 165; 
+
     itemsList.forEach((item, index) => {
-      const desc = String(item?.description || item?.item_desc || ''); const splitDesc = doc.splitTextToSize(desc, 85); 
-      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; totalNos += rawQty;
-      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); const paddedQty = String(rawQty).padStart(2, '0');
-      const rowHeight = (splitDesc.length * 4) + 1;
+      const desc = String(item?.description || item?.item_desc || ''); 
+      const splitDesc = doc.splitTextToSize(desc, 85); 
+      const rawQty = parseInt(item.disp_qty || item.req_qty) || 0; 
+      totalNos += rawQty;
       
-      if (y + rowHeight > maxY) {
-          drawPageGrid(maxY); drawSignatures(maxY + 15);
-          doc.line(5, maxY, 5, maxY + 22); doc.line(143, maxY, 143, maxY + 22); doc.line(5, maxY + 22, 143, maxY + 22);
-          doc.addPage(); drawPageHeaders(); y = 53;
+      const displayStr = String(getDisplayQty(desc, rawQty, item.unit || getUnit(desc))); 
+      const paddedQty = String(rawQty).padStart(2, '0');
+      
+      // Exact math: 4mm per line of text, plus 3mm of padding
+      const rowHeight = (splitDesc.length * 4) + 3; 
+      
+      // Page Break Engine
+      if (currentY + rowHeight > pageMaxY) {
+          drawGridLines(pageMaxY); 
+          drawSignatures(pageMaxY + 15);
+          doc.line(5, pageMaxY, 5, pageMaxY + 22); doc.line(143, pageMaxY, 143, pageMaxY + 22); doc.line(5, pageMaxY + 22, 143, pageMaxY + 22);
+          
+          doc.addPage(); 
+          drawPageHeaders(); 
+          currentY = 53;
       }
-      doc.text(`${index + 1}`, 10, y, { align: "center" }); doc.text(splitDesc, 17, y); doc.setFont("helvetica", "bold"); doc.text(paddedQty, 115, y, { align: "center" }); doc.setFontSize(8); doc.text(displayStr, 134, y, { align: "center" }); doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      if (index < itemsList.length - 1 && y + rowHeight < maxY) { doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); doc.line(5.2, y + rowHeight - 2, 142.8, y + rowHeight - 2); doc.setDrawColor(0, 0, 0); }
-      y += rowHeight + 2; 
+
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+      doc.text(`${index + 1}`, 10, currentY + 1, { align: "center" }); 
+      doc.text(splitDesc, 17, currentY + 1); 
+      
+      doc.setFont("helvetica", "bold"); 
+      doc.text(paddedQty, 115, currentY + 1, { align: "center" }); 
+      
+      doc.setFontSize(8); 
+      doc.text(displayStr, 134, currentY + 1, { align: "center" });
+      
+      currentY += rowHeight; 
+      
+      // Draw horizontal separator between items
+      if (index < itemsList.length - 1 && currentY < pageMaxY) { 
+        doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); 
+        doc.line(5.2, currentY - 1.5, 142.8, currentY - 1.5); 
+        doc.setDrawColor(0, 0, 0); 
+      }
     });
 
-    drawPageGrid(y);
-    doc.setFillColor(235, 235, 235); doc.rect(5, y, 100, 7, 'F'); doc.rect(105, y, 38, 7, 'F'); doc.rect(5, y, 138, 7, 'S'); doc.line(105, y, 105, y + 7); 
-    doc.setFont("helvetica", "bold"); doc.text("TOTAL", 100, y + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, y + 5, { align: "center" });
-    const sigY = y + 20; drawSignatures(sigY);
-    doc.line(5, y + 7, 5, sigY + 7); doc.line(143, y + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
+    // Close the final grid
+    drawGridLines(currentY);
+    
+    // Draw the Totals Box
+    doc.setFillColor(235, 235, 235); doc.rect(5, currentY, 100, 7, 'F'); doc.rect(105, currentY, 38, 7, 'F'); doc.rect(5, currentY, 138, 7, 'S'); doc.line(105, currentY, 105, currentY + 7); 
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("TOTAL", 100, currentY + 5, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, currentY + 5, { align: "center" });
+    
+    // Draw final signatures
+    const sigY = currentY + 20; 
+    drawSignatures(sigY);
+    doc.line(5, currentY + 7, 5, sigY + 7); doc.line(143, currentY + 7, 143, sigY + 7); doc.line(5, sigY + 7, 143, sigY + 7);
+
+    // Apply Pagination (Page 1 of X)
     const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) { doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" }); }
+    for (let i = 1; i <= totalPages; i++) { 
+        doc.setPage(i); 
+        doc.setFont("helvetica", "normal"); doc.setFontSize(8); 
+        doc.text(`Page ${i} of ${totalPages}`, 140, 203, { align: "right" }); 
+    }
+    
     doc.save(`${challanNo}.pdf`);
   };
 
