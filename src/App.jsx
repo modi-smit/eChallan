@@ -205,7 +205,7 @@ export default function App() {
         try {
             if (window.OneSignalDeferred) {
               window.OneSignalDeferred.push(async function(OneSignal) {
-                await OneSignal.init({ appId: "YOUR_ONESIGNAL_APP_ID_HERE", safari_web_id: "web.onesignal.auto.YOUR_SAFARI_ID", notifyButton: { enable: false }});
+                await OneSignal.init({ appId: "983ab91e-4cd8-4874-b1d1-6c43613c2614", safari_web_id: "web.onesignal.auto.528b6caf-1e6b-4608-b4e6-faa03f146a9c", notifyButton: { enable: false }});
                 if(OneSignal.User) { OneSignal.User.PushSubscription.optIn(); OneSignal.User.addTag("role", currentRole); }
               });
             }
