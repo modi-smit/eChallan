@@ -169,6 +169,7 @@ export default function App() {
         const dispRes = await supabase.from('transactions').select('*').eq('status', 'DISPATCHED').order('timestamp', { ascending: false });
         const retReqRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_REQUESTED').order('timestamp', { ascending: true });
         const retInitRes = await supabase.from('transactions').select('*').eq('status', 'RETURN_INITIATED').order('timestamp', { ascending: true });
+
         if (poRes.data) setPendingPOs(poRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
         if (dispRes.data) setIncomingDeliveries(dispRes.data.reduce((acc, curr) => { (acc[curr.challan_no] = acc[curr.challan_no] || []).push(curr); return acc; }, {}));
         if (retReqRes.data) setPendingDepotReturns(retReqRes.data.reduce((acc, curr) => { (acc[curr.group_id] = acc[curr.group_id] || []).push(curr); return acc; }, {}));
@@ -299,76 +300,45 @@ export default function App() {
   const retailFilteredItems = useMemo(() => smartSearch(retailSearch), [retailSearch, masterItems]);
 
   // ==========================================
-  // --- PERFECT FIXED-BOTTOM PDF ENGINE ---
+  // --- FIXED PDF ENGINE (ABSOLUTE BOTTOM) ---
   // ==========================================
   const printPDF = (challanNo, itemsList) => {
     const doc = new jsPDF({ format: 'a5' }); 
-    const isReturn = String(challanNo).startsWith('RT'); 
-    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date(); 
+    const isReturn = String(challanNo).startsWith('RT');
+    const txTimestamp = itemsList[0]?.timestamp ? new Date(itemsList[0].timestamp) : new Date();
     let totalNos = 0;
     
-    const drawTemplate = (isLastPage) => {
+    const drawPageHeaders = () => {
         doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
         doc.setFillColor(235, 235, 235); doc.rect(5, 5, 138, 16, 'F'); doc.rect(5, 5, 138, 16, 'S'); 
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); 
-        doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("GUJARAT OIL DEPOT", 74, 12, { align: "center" });
         doc.setFontSize(10); doc.text(isReturn ? "RETURN CHALLAN" : "DELIVERY CHALLAN", 74, 18, { align: "center" });
         doc.setDrawColor(0, 0, 0); doc.line(5, 21, 143, 21); 
-        
-        doc.setFontSize(9); 
-        doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
+        doc.setFontSize(9); doc.text(isReturn ? `RETURN NO :` : `CHALLAN NO :`, 8, 27); doc.setFont("helvetica", "normal"); doc.text(String(challanNo), 32, 27);
         doc.setFont("helvetica", "bold"); doc.text(`DATE :`, 104, 27); doc.setFont("helvetica", "normal"); doc.text(formatDate(txTimestamp), 116, 27);
         doc.setFont("helvetica", "bold"); doc.text(`BILLED TO :`, 8, 33); doc.setFont("helvetica", "normal"); doc.text(`SOUTH GUJARAT DISTRIBUTORS`, 28, 33); doc.text(`RETAIL STORE`, 28, 38);
-        
         doc.setFillColor(245, 245, 245); doc.rect(5, 41, 138, 7, 'F'); doc.rect(5, 41, 138, 7, 'S'); 
         doc.setFont("helvetica", "bold"); doc.setFontSize(9);
         doc.text("SR", 10, 46, { align: "center" }); doc.text("ITEM DESCRIPTION", 17, 46, { align: "left" }); doc.text("NOS", 115, 46, { align: "center" }); doc.text("QTY", 134, 46, { align: "center" });
-        
-        // FIXED GRID (Always reaches y=175)
-        const gridBottom = isLastPage ? 168 : 175; 
-        doc.line(5, 48, 5, 175); doc.line(143, 48, 143, 175); 
-        doc.line(15, 48, 15, gridBottom); doc.line(105, 48, 105, gridBottom); doc.line(125, 48, 125, gridBottom); 
-        
-        if (!isLastPage) {
-            doc.line(5, 175, 143, 175); 
-        } else {
-            // FIXED TOTAL BOX AT BOTTOM OF GRID
-            doc.line(5, 168, 143, 168); 
-            doc.setFillColor(235, 235, 235); doc.rect(5, 168, 100, 7, 'F'); doc.rect(105, 168, 38, 7, 'F'); doc.rect(5, 168, 138, 7, 'S');
-            doc.line(105, 168, 105, 175); 
-            doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("TOTAL", 100, 173, { align: "right" }); 
-            doc.text(String(totalNos).padStart(2, '0'), 115, 173, { align: "center" });
-        }
-
-        // FIXED SIGNATURE BLOCK (y=178 to 200)
-        doc.rect(5, 178, 138, 22, 'S'); 
-        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, 183);
-        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
-          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, 191); 
-          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, 197);
-        }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, 183, { align: "right" });
-        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, 191, { align: "right" });
-        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, 197, { align: "right" });
     };
 
-    const pages = [[]]; let currentY = 53; const contentMaxY = 165; 
-
+    // Calculate Pages first to know total pages
+    const pages = [[]]; let currentY = 53; const contentMaxY = 162; 
     itemsList.forEach((item) => {
       const desc = String(item?.description || item?.item_desc || ''); 
       const splitDesc = doc.splitTextToSize(desc, 85); 
       const rowHeight = (splitDesc.length * 4) + 2; 
       totalNos += parseInt(item.disp_qty || item.req_qty) || 0;
-
       if (currentY + rowHeight > contentMaxY) { pages.push([]); currentY = 53; }
       pages[pages.length - 1].push({ item, splitDesc, rowHeight });
       currentY += rowHeight;
     });
 
+    const totalPages = pages.length;
+
     pages.forEach((pageItems, pageIndex) => {
         if (pageIndex > 0) doc.addPage();
-        const isLastPage = pageIndex === pages.length - 1;
-        drawTemplate(isLastPage); 
+        drawPageHeaders(); 
         
         let y = 53;
         pageItems.forEach((row, i) => {
@@ -389,8 +359,32 @@ export default function App() {
             if (i < pageItems.length - 1) { doc.setLineWidth(0.1); doc.setDrawColor(200, 200, 200); doc.line(5.2, y, 142.8, y); doc.setDrawColor(0, 0, 0); }
         });
 
+        // ABSOLUTE GRID - Always draws down to Y=165
+        doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.4);
+        doc.line(5, 48, 5, 165); doc.line(143, 48, 143, 165); 
+        doc.line(15, 48, 15, 165); doc.line(105, 48, 105, 165); doc.line(125, 48, 125, 165); 
+        doc.line(5, 165, 143, 165); // Bottom of grid
+
+        // TOTAL BOX - Only on last page, placed directly below grid
+        if (pageIndex === totalPages - 1) {
+            doc.setFillColor(235, 235, 235); doc.rect(5, 165, 100, 7, 'F'); doc.rect(105, 165, 38, 7, 'F'); doc.rect(5, 165, 138, 7, 'S'); doc.line(105, 165, 105, 172); 
+            doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("TOTAL", 100, 170, { align: "right" }); doc.text(String(totalNos).padStart(2, '0'), 115, 170, { align: "center" });
+        }
+
+        // ABSOLUTE SIGNATURE BOX - Locked to Y=175 on every page
+        doc.rect(5, 175, 138, 22, 'S'); 
+        doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.text("Receiver's Signature / Stamp", 8, 180);
+        if (itemsList.length > 0 && (itemsList[0].status === 'ACCEPTED' || itemsList[0].status === 'RETURN_ACCEPTED')) {
+          doc.setTextColor(0, 128, 0); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Digitally Verified", 8, 188); 
+          doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.text(`Verified: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 8, 194);
+        }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("For GUJARAT OIL DEPOT", 140, 180, { align: "right" });
+        doc.setTextColor(0, 51, 153); doc.setFont("helvetica", "italic"); doc.setFontSize(10); doc.text("Electronically Signed Document", 140, 188, { align: "right" });
+        doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.text(`Auth: ${formatDate(txTimestamp)} ${formatTime(txTimestamp)}`, 140, 194, { align: "right" });
+
+        // Pagination
         doc.setFont("helvetica", "normal"); doc.setFontSize(8); 
-        doc.text(`Page ${pageIndex + 1} of ${pages.length}`, 140, 206, { align: "right" }); 
+        doc.text(`Page ${pageIndex + 1} of ${totalPages}`, 140, 202, { align: "right" }); 
     });
 
     doc.save(`${challanNo}.pdf`);
@@ -632,6 +626,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-200 text-gray-900 pb-10 font-sans selection:bg-blue-200 select-none">
+      
       <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black font-bold uppercase text-sm animate-slide-in flex items-center gap-3 w-72 bg-white text-black`}>
@@ -680,26 +675,23 @@ export default function App() {
         <div className="fixed inset-0 bg-black/75 z-50 flex justify-center items-center p-3 md:p-4 z-[60]">
             <div className="bg-white border-2 border-black max-w-xl w-full p-4 md:p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
               <h2 className="font-bold border-b-2 border-black pb-2 md:pb-3 mb-3 md:mb-4 uppercase text-lg">EDIT RECORD: {masterEditModal.keyValue}</h2>
-              <div className="space-y-3 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
-                <div className="hidden sm:flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
+              <div className="space-y-2 mb-4 md:mb-6 max-h-[60vh] overflow-y-auto pr-2">
+                <div className="flex text-[11px] md:text-[13px] font-bold text-gray-500 px-2 uppercase"><span className="flex-1">ITEM DESCRIPTION</span><span className="w-24 text-center">EDIT QTY</span></div>
                 {masterEditModal.items.map((item, idx) => (
-                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2 bg-gray-100 border border-gray-300 p-3 rounded">
+                  <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <input type="text" list="masterItemsList" value={item.item_desc} onChange={(e) => {
                         const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], item_desc: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
-                    }} className="w-full sm:flex-1 text-[13px] md:text-sm p-2 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
-                    <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto mt-1 sm:mt-0">
-                       <span className="text-[11px] font-bold text-gray-500 uppercase sm:hidden">Quantity:</span>
-                       <input type="number" value={item.edit_qty} onChange={(e) => {
-                          const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
-                       }} className="w-24 text-[13px] md:text-sm p-2 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
-                    </div>
+                    }} className="flex-1 min-w-0 text-[11px] md:text-[13px] p-1.5 border-2 border-black font-bold focus:bg-yellow-50 focus:outline-none select-text uppercase" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => {
+                        const updated = [...masterEditModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setMasterEditModal({...masterEditModal, items: updated});
+                    }} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
-                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m?.description} />)}</datalist>
+                <datalist id="masterItemsList">{masterItems.map((m, i) => <option key={i} value={m.description} />)}</datalist>
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
-                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
+                <button onClick={() => { triggerHaptic(30); setMasterEditModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors text-black">CANCEL</button>
+                <button onClick={confirmMasterEdit} disabled={isProcessing} className="flex-1 border-2 border-black bg-blue-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'SAVING...' : 'SAVE CHANGES'}</button>
               </div>
             </div>
         </div>
@@ -713,17 +705,17 @@ export default function App() {
                   <div className="flex text-[11px] font-bold text-gray-500 px-2 uppercase"><span className="w-8 text-center">CHK</span><span className="flex-1">ITEM DESCRIPTION</span><span className="w-20 md:w-24 text-center">RCVD QTY</span></div>
                   {verifyModal.items.map((item, idx) => (
                     <label key={idx} className={`flex items-center space-x-2 md:space-x-3 p-2 border-2 cursor-pointer transition-colors ${verifyModal.checks[idx] ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 border-gray-300 hover:bg-gray-100'}`}>
-                      <div className="w-8 flex justify-center"><input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-6 h-6 cursor-pointer accent-blue-600" /></div>
-                      <span className="flex-1 text-[13px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
+                      <div className="w-8 flex justify-center"><input type="checkbox" checked={verifyModal.checks[idx]} onChange={() => toggleVerifyCheck(idx)} className="w-5 h-5 cursor-pointer accent-blue-600" /></div>
+                      <span className="flex-1 text-[11px] md:text-sm font-bold text-gray-800 truncate" title={item.item_desc}>{item.item_desc}</span>
                       <input type="number" value={item.edit_qty} onClick={(e) => e.stopPropagation()} onChange={(e) => {
                               const updated = [...verifyModal.items]; updated[idx] = { ...updated[idx], edit_qty: e.target.value }; setVerifyModal({ ...verifyModal, items: updated });
-                          }} className="w-20 md:w-24 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
+                          }} className="w-16 md:w-24 text-[13px] md:text-sm p-1 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none" />
                     </label>
                   ))}
                 </div>
                 <div className="flex space-x-3">
-                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
-                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
+                  <button onClick={() => { triggerHaptic(30); setVerifyModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 text-black">CANCEL</button>
+                  <button onClick={acceptDelivery} disabled={!Object.values(verifyModal.checks).some(Boolean) || isProcessing} className="flex-1 border-2 border-black bg-blue-700 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-blue-800 disabled:opacity-50 transition-all">{isProcessing ? 'PROCESSING...' : 'CONFIRM MATCH'}</button>
                 </div>
             </div>
         </div>
@@ -739,13 +731,13 @@ export default function App() {
                   <div key={idx} className="flex items-center gap-2 bg-gray-100 border border-gray-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleEditPOQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-2">
-                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
+                <button onClick={() => { triggerHaptic(30); setEditPOModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmDispatchPO} disabled={isProcessing} className="flex-1 border-2 border-black bg-slate-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-slate-900 uppercase transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE CHALLAN'}</button>
               </div>
             </div>
         </div>
@@ -761,46 +753,45 @@ export default function App() {
                   <div key={idx} className="flex items-center gap-2 bg-red-50 border border-red-300 p-2">
                     <span className="flex-1 min-w-0 text-[11px] md:text-[13px] font-bold truncate" title={item.item_desc}>{item.item_desc}</span>
                     <span className="text-[11px] md:text-[13px] font-bold text-gray-600 w-16 text-center whitespace-nowrap">{getDisplayQty(item.item_desc, item.req_qty, item.unit)}</span>
-                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[13px] md:text-sm p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
+                    <input type="number" value={item.edit_qty} onChange={(e) => handleProcessReturnQty(idx, e.target.value)} className="w-16 md:w-20 text-[11px] md:text-[13px] p-1.5 border-2 border-black text-center font-bold focus:bg-yellow-50 focus:outline-none select-text" />
                   </div>
                 ))}
               </div>
               <div className="flex space-x-3">
-                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
-                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
+                <button onClick={() => { triggerHaptic(30); setProcessReturnModal(null); }} className="flex-1 border-2 border-black bg-gray-200 py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-gray-300 transition-colors">CANCEL</button>
+                <button onClick={confirmProcessReturnRequest} disabled={isProcessing} className="flex-1 border-2 border-black bg-red-800 text-white py-2 md:py-3 text-[13px] md:text-sm font-bold hover:bg-red-900 transition-all disabled:opacity-50">{isProcessing ? 'GENERATING...' : 'GENERATE RETURN'}</button>
               </div>
             </div>
         </div>
       )}
 
-      {/* --- CLASSIC NAVBAR RESTORED --- */}
-      <nav className="bg-gray-800 text-white border-b-2 border-black p-2.5 md:p-3 sticky top-0 z-50 shadow-sm overflow-hidden">
-        <div className="container mx-auto flex flex-nowrap justify-between items-center w-full font-bold uppercase text-[9px] md:text-sm overflow-x-auto hide-scrollbar">
-          <div className="flex flex-nowrap items-center gap-1 md:gap-2 flex-shrink-0">
-            <span className="tracking-widest hidden sm:inline">GUJARAT OIL DEPOT</span>
-            <span className="tracking-widest sm:hidden text-xs">GOD</span>
-            <button onClick={() => { triggerHaptic(50); if (emergencyUrl) window.open(emergencyUrl, '_blank'); else alert("Emergency URL not set."); }} className="ml-1 md:ml-2 hover:scale-110 transition-transform text-sm md:text-lg cursor-pointer bg-transparent border-none p-0" title="Emergency Portal">🚨</button>
+      {/* --- STRICTLY ONE LINE, SMALL RIBBON (WINDOWS STYLE) --- */}
+      <nav className="bg-gray-800 text-white border-b-2 border-black p-1.5 md:p-2.5 sticky top-0 z-50 shadow-sm overflow-hidden">
+        <div className="container mx-auto flex items-center justify-between overflow-x-auto hide-scrollbar flex-nowrap w-full">
+          <div className="flex items-center gap-1 md:gap-2 flex-shrink-0 pr-2 border-r border-gray-600 mr-1">
+            <span className="tracking-widest font-bold text-[9px] md:text-[13px] uppercase">GUJARAT OIL DEPOT</span>
+            <button onClick={() => { triggerHaptic(50); if (emergencyUrl) window.open(emergencyUrl, '_blank'); else alert("Emergency URL not set."); }} className="ml-1 text-[11px] md:text-sm bg-transparent border-none p-0 cursor-pointer">🚨</button>
             {actionableCount > 0 && (
-              <span className="relative flex h-2 w-2 md:h-3 md:w-3 -ml-1 -mt-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 md:h-3 md:w-3 bg-blue-500"></span></span>
+              <span className="relative flex h-2 w-2 md:h-2.5 md:w-2.5 ml-1"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 md:h-2.5 md:w-2.5 bg-blue-500"></span></span>
             )}
-            {!isOnline && <span className="ml-1 md:ml-3 bg-red-600 text-white px-1.5 md:px-2 py-0.5 rounded text-[8px] md:text-[10px] font-black animate-pulse shadow-sm border border-red-800">OFFLINE</span>}
+            {!isOnline && <span className="ml-1 bg-red-600 text-white px-1 py-0.5 rounded text-[8px] font-black animate-pulse">OFFLINE</span>}
             {(userRole === 'admin' || userRole === 'master') && (
-                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="ml-1 md:ml-2 text-gray-400 hover:text-white transition-colors text-sm md:text-lg">⚙️</button>
+                <button onClick={() => { triggerHaptic(20); setSettingsModal(true); }} className="text-gray-400 hover:text-white text-[11px] md:text-sm ml-1">⚙️</button>
             )}
           </div>
-          <div className="flex flex-nowrap gap-1 md:gap-2 items-center flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0">
             {userRole && (
-              <div className="p-0.5 md:p-1 flex flex-nowrap gap-0.5 md:gap-1 rounded bg-gray-700">
+              <div className="p-0.5 flex gap-0.5 rounded bg-gray-700 flex-nowrap">
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'depot') && (
-                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold whitespace-nowrap transition-colors ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
+                  <button onClick={() => { triggerHaptic(30); setView('depot'); }} className={`px-2 md:px-3 py-1 text-[9px] md:text-[11px] font-bold rounded shadow-sm whitespace-nowrap ${view === 'depot' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>DEPOT</button>
                 )}
                 {(userRole === 'admin' || userRole === 'master' || userRole === 'retail') && (
-                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold whitespace-nowrap transition-colors ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
+                  <button onClick={() => { triggerHaptic(30); setView('retail'); }} className={`px-2 md:px-3 py-1 text-[9px] md:text-[11px] font-bold rounded shadow-sm whitespace-nowrap ${view === 'retail' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>RETAIL</button>
                 )}
-                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-1.5 md:px-3 py-1 md:py-1.5 text-[8px] md:text-xs font-bold whitespace-nowrap transition-colors ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
+                <button onClick={() => { triggerHaptic(30); setView('ledger'); setLedgerLimit(50); }} className={`px-2 md:px-3 py-1 text-[9px] md:text-[11px] font-bold rounded shadow-sm whitespace-nowrap ${view === 'ledger' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}>LEDGER</button>
               </div>
             )}
-            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-4 py-1 md:py-1.5 text-[8px] md:text-xs border border-black whitespace-nowrap hover:bg-red-700 transition-colors">LOGOUT</button>
+            <button onClick={() => { triggerHaptic([30,50]); supabase.auth.signOut(); }} className="bg-red-600 px-2 md:px-3 py-1 text-[9px] md:text-[11px] font-bold border border-black rounded shadow-sm hover:bg-red-700 whitespace-nowrap ml-1">LOGOUT</button>
           </div>
         </div>
       </nav>
